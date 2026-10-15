@@ -7,7 +7,7 @@ PREFIX = "!veyra"
 # OpenRouter model configuration
 DEFAULT_MODEL = os.getenv(
     "OPENROUTER_MODEL",
-    "openai/gpt-oss-120b:free"
+    "openai/gpt-oss-120b"
 )
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
