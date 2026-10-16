@@ -1,62 +1,63 @@
 
 import json
-import os
-import tempfile
+from pathlib import Path
 
-DATA_DIR = "data"
-MODES_FILE = os.path.join(DATA_DIR, "modes.json")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+MODES_FILE = DATA_DIR / "modes.json"
 
 VALID_MODES = {"chat", "longchat"}
 
 
-def _load_modes():
-    os.makedirs(DATA_DIR, exist_ok=True)
+def _load_modes() -> dict:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not os.path.exists(MODES_FILE):
+    if not MODES_FILE.exists():
         return {}
 
     try:
-        with open(MODES_FILE, "r", encoding="utf-8") as file:
+        with MODES_FILE.open("r", encoding="utf-8") as file:
             data = json.load(file)
 
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise RuntimeError("modes.json must contain a JSON object.")
 
-    except (json.JSONDecodeError, OSError):
-        print("Warning: Could not read modes.json. Using default modes.")
-        return {}
+        return data
+
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"Invalid JSON in {MODES_FILE}: {error}"
+        ) from error
 
 
-def _save_modes(modes):
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    fd, temp_path = tempfile.mkstemp(
-        dir=DATA_DIR,
-        prefix="modes_",
-        suffix=".tmp",
-    )
+def _save_modes(data: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = MODES_FILE.with_suffix(".tmp")
 
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(modes, file, indent=2)
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2)
 
-        os.replace(temp_path, MODES_FILE)
+        temp_path.replace(MODES_FILE)
 
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        if temp_path.exists():
+            temp_path.unlink()
 
 
-def get_chat_mode(guild_id):
+def get_chat_mode(guild_id: int) -> str:
     modes = _load_modes()
     mode = modes.get(str(guild_id), "chat")
 
     return mode if mode in VALID_MODES else "chat"
 
 
-def set_chat_mode(guild_id, mode):
+def set_chat_mode(guild_id: int, mode: str) -> None:
     if mode not in VALID_MODES:
         raise ValueError("Mode must be 'chat' or 'longchat'.")
 
     modes = _load_modes()
     modes[str(guild_id)] = mode
     _save_modes(modes)
+
+    print(f"Saved Veyra mode settings to {MODES_FILE}")
