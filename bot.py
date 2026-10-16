@@ -4,6 +4,7 @@ import re
 import time
 import discord
 
+from commands.memory import handle_memory, handle_forget
 from config import PREFIX
 from ai_client import ask_veyra, summarize_memory
 from channel_manager import (
