@@ -2,38 +2,47 @@
 import json
 from pathlib import Path
 
-DATA_DIR = Path("data")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "channels.json"
 
 
 def _load_channels() -> dict:
-    """Load the saved AI chat channels for all servers."""
+    """Load saved AI chat channels for all servers."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not CONFIG_PATH.exists():
+        return {}
+
     try:
         with CONFIG_PATH.open("r", encoding="utf-8") as file:
             data = json.load(file)
 
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise RuntimeError("channels.json must contain a JSON object.")
 
-    except FileNotFoundError:
-        return {}
+        return data
 
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as error:
         raise RuntimeError(
-            "channels.json contains invalid JSON. "
-            "Fix the file before starting Veyra."
-        )
+            f"Invalid JSON in {CONFIG_PATH}: {error}"
+        ) from error
 
 
 def _save_channels(data: dict) -> None:
     """Save channel settings safely."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     temp_path = CONFIG_PATH.with_suffix(".tmp")
 
-    with temp_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2)
+    try:
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2)
 
-    temp_path.replace(CONFIG_PATH)
+        temp_path.replace(CONFIG_PATH)
+
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 def get_chat_channels(guild_id: int) -> set[int]:
@@ -52,18 +61,14 @@ def get_chat_channels(guild_id: int) -> set[int]:
 
 
 def get_chat_channel(guild_id: int):
-    """
-    Compatibility helper for existing bot.py.
-    Returns all configured channel IDs as a set.
-    """
+    """Compatibility helper for older code."""
     return get_chat_channels(guild_id)
 
 
 def set_chat_channel(guild_id: int, channel_id: int) -> None:
-    """Add one AI chat channel without replacing existing channels."""
+    """Add one channel without removing other configured channels."""
     data = _load_channels()
     server_id = str(guild_id)
-
     existing = data.get(server_id, [])
 
     if not isinstance(existing, list):
@@ -77,15 +82,15 @@ def set_chat_channel(guild_id: int, channel_id: int) -> None:
 
     channel_ids.add(int(channel_id))
     data[server_id] = sorted(channel_ids)
-
     _save_channels(data)
+
+    print(f"Saved channel configuration to {CONFIG_PATH}")
 
 
 def remove_chat_channel(guild_id: int, channel_id: int) -> bool:
-    """Remove only the specified AI chat channel."""
+    """Remove only the specified channel."""
     data = _load_channels()
     server_id = str(guild_id)
-
     existing = data.get(server_id, [])
 
     if not isinstance(existing, list):
@@ -108,4 +113,13 @@ def remove_chat_channel(guild_id: int, channel_id: int) -> bool:
         data.pop(server_id, None)
 
     _save_channels(data)
+    print(f"Updated channel configuration at {CONFIG_PATH}")
     return True
+
+
+def remove_guild_channels(guild_id: int) -> None:
+    """Remove all saved channels for a server."""
+    data = _load_channels()
+
+    if data.pop(str(guild_id), None) is not None:
+        _save_channels(data)
