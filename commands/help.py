@@ -7,65 +7,71 @@ from config import PREFIX
 async def handle_help(message, prefix=None):
     if prefix is None:
         prefix = PREFIX
+
     embed = discord.Embed(
-        title="❄️ VEYRA AI  |  COMMAND CENTER",
+        title="❄️ VEYRA AI",
         description=(
-            "Your gateway to Veyra's intelligence.\n"
+            "**COMMAND CENTER**\n"
+            "Your gateway to intelligence beyond limits.\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "💠 **AI CHAT**\n"
-            "Chat with Veyra in your server's configured channel."
+            "Chat naturally in the configured server channel."
         ),
         color=discord.Color.from_rgb(35, 160, 255),
     )
 
     embed.add_field(
-        name="⚡  GENERAL COMMANDS",
+        name="⚡ GENERAL COMMANDS",
         value=(
-            f"`{PREFIX} help` — Display this command guide\n"
-            f"`{PREFIX} guide` — Open the help guide\n"
-            f"`{PREFIX} ping` — Check latency, uptime and system stats\n"
-            f"`{PREFIX} memory` — View your saved AI memory privately\n"
-            f"`{PREFIX} forget` — Clear your saved memory"
+            f"`{prefix} help` — Display this command guide\n"
+            f"`{prefix} guide` — Open the help guide\n"
+            f"`{prefix} ping` — Check latency and system stats\n"
+            f"`{prefix} memory` — View your saved memory privately\n"
+            f"`{prefix} forget` — Clear your saved memory"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="🛠️  SERVER MANAGEMENT",
+        name="🛠️ SERVER MANAGEMENT",
         value=(
-            f"`{PREFIX} setchannel #channel` — Set the AI chat channel\n"
-            f"`{PREFIX} removechannel #channel` — Remove the AI chat channel\n"
-            f"`{PREFIX} chat` — Enable quick-response mode\n"
-            f"`{PREFIX} longchat` — Enable detailed-response mode"
+            f"`{prefix} setchannel #channel` — Configure the AI chat channel\n"
+            f"`{prefix} removechannel #channel` — Remove the AI chat channel\n"
+            f"`{prefix} chat` — Switch to quick-response mode\n"
+            f"`{prefix} longchat` — Switch to detailed-response mode"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="🔹  HOW TO USE VEYRA",
+        name="🌌 HOW TO USE VEYRA",
         value=(
-            "1. An admin configures the chat channel.\n"
-            "2. Send a normal message in that channel.\n"
-            "3. Chat naturally or ask for detailed explanations.\n"
-            "4. Use the memory commands to manage your saved context."
+            " **01**  Ask questions in the configured chat channel.\n"
+            " **02**  Chat naturally in your preferred language.\n"
+            " **03**  Use `memory` to review saved context.\n"
+            " **04**  Use `forget` to clear your saved memory."
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="🔐  PERMISSIONS",
+        name="🔐 PERMISSIONS",
         value=(
-            "Channel setup and response-mode changes require "
-            "**server owner or administrator** permissions.\n"
-            "Memory commands manage only your own saved memory."
+            "Channel configuration and response-mode changes "
+            "require server owner or administrator permissions.\n\n"
+            "Memory commands affect only your own saved memory."
         ),
         inline=False,
     )
+
+    bot_member = message.guild.me if message.guild else None
 
     embed.set_footer(
         text="VEYRA AI • Powered by Volbasty Studios",
-        icon_url=message.client.user.display_avatar.url
-        if message.client.user else None,
+        icon_url=(
+            bot_member.display_avatar.url
+            if bot_member else None
+        ),
     )
 
     await message.reply(embed=embed, mention_author=False)
