@@ -131,11 +131,12 @@ async def on_message(message):
         )
 
 
+
 @bot.event
 async def on_guild_remove(guild):
-    # Clear saved channel configuration for this server.
-    for channel_id in get_chat_channels(guild.id):
-        remove_chat_channel(guild.id, channel_id)
+    from channel_manager import remove_guild_channels
+
+    remove_guild_channels(guild.id)
 
 
 def main():
