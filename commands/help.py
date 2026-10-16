@@ -4,7 +4,9 @@ import discord
 from config import PREFIX
 
 
-async def handle_help(message):
+async def handle_help(message, prefix=None):
+    if prefix is None:
+        prefix = PREFIX
     embed = discord.Embed(
         title="❄️ VEYRA AI  |  COMMAND CENTER",
         description=(
