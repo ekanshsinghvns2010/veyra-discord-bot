@@ -10,14 +10,14 @@ from config import BOT_NAME, BOT_STUDIO
 # Replace these placeholders with your server's animated emoji IDs.
 # Format: "<a:emoji_name:123456789012345678>"
 EMOJIS = {
-    "ping": "📡",
-    "memory": "🧠",
-    "cpu": "⚙️",
+    "ping": "<a:uptime:1560652462287753277>",
+    "memory": "<a:equipment:1560654983689539676>",
+    "cpu": "<:cpu:1560652822813351956>",
     "users": "👥",
     "servers": "🏠",
     "commands": "📊",
     "owner": "👑",
-    "uptime": "🟢",
+    "uptime": "<a:online:1522248989087498463>",
 }
 
 
