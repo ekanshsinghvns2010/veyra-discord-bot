@@ -4,7 +4,6 @@ import re
 import time
 import discord
 
-from commands.memory import handle_memory, handle_forget
 from config import PREFIX
 from ai_client import ask_veyra, summarize_memory
 from channel_manager import (
@@ -23,6 +22,8 @@ from commands.ping import handle_ping
 from commands.help import handle_help
 from commands.setchannel import handle_setchannel
 from commands.removechannel import handle_removechannel
+from commands.memory import handle_memory, handle_forget
+
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -48,32 +49,25 @@ async def send_long_message(channel, content):
 
 
 def detect_language_preference(content):
-    """Recognize clear, explicit language preferences."""
+    """Detect explicit language requests."""
     text = content.lower().strip()
 
+    languages = (
+        "hindi|english|spanish|french|german|japanese|"
+        "korean|arabic|bengali|tamil|telugu|marathi|"
+        "urdu|gujarati|punjabi"
+    )
+
     patterns = [
-        (r"\b(?:talk|speak|reply|respond|answer|chat)\s+in\s+"
-         r"(hindi|english|spanish|french|german|japanese|"
-         r"korean|arabic|bengali|tamil|telugu|marathi|"
-         r"urdu|gujarati|punjabi)\b", 1),
-
-        (r"\b(?:always|please)\s+(?:use|reply in|speak in|"
-         r"respond in)\s+"
-         r"(hindi|english|spanish|french|german|japanese|"
-         r"korean|arabic|bengali|tamil|telugu|marathi|"
-         r"urdu|gujarati|punjabi)\b", 1),
-
-        (r"\b(?:stop speaking in|don't speak in|do not speak in|"
-         r"switch to)\s+"
-         r"(hindi|english|spanish|french|german|japanese|"
-         r"korean|arabic|bengali|tamil|telugu|marathi|"
-         r"urdu|gujarati|punjabi)\b", 1),
+        rf"\b(?:talk|speak|reply|respond|answer|chat)\s+in\s+({languages})\b",
+        rf"\b(?:always|please)\s+(?:use|reply in|speak in|respond in)\s+({languages})\b",
+        rf"\b(?:stop speaking in|don't speak in|do not speak in|switch to)\s+({languages})\b",
     ]
 
-    for pattern, group in patterns:
+    for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return match.group(group).capitalize()
+            return match.group(1).capitalize()
 
     return None
 
@@ -118,29 +112,61 @@ async def on_message(message):
     if not content:
         return
 
+    # Ping and bot statistics
     if lowered == f"{PREFIX} ping":
         COMMANDS_USED += 1
         await handle_ping(
-            message, bot, START_TIME, COMMANDS_USED
+            message,
+            bot,
+            START_TIME,
+            COMMANDS_USED,
         )
         return
 
-    if lowered in (f"{PREFIX} help", f"{PREFIX} guide"):
+    # Help
+    if lowered in (
+        f"{PREFIX} help",
+        f"{PREFIX} guide",
+    ):
         COMMANDS_USED += 1
         await handle_help(message, PREFIX)
         return
 
+    # Show personal memory privately in DMs
+    if lowered == f"{PREFIX} memory":
+        COMMANDS_USED += 1
+        await handle_memory(message)
+        return
+
+    # Clear this user's memory in the current server
+    if lowered == f"{PREFIX} forget":
+        COMMANDS_USED += 1
+        await handle_forget(message)
+        return
+
+    # Configure AI channels
     if lowered.startswith(f"{PREFIX} setchannel"):
         COMMANDS_USED += 1
-        await handle_setchannel(message, bot, is_server_admin)
+        await handle_setchannel(
+            message,
+            bot,
+            is_server_admin,
+        )
         return
 
     if lowered.startswith(f"{PREFIX} removechannel"):
         COMMANDS_USED += 1
-        await handle_removechannel(message, is_server_admin)
+        await handle_removechannel(
+            message,
+            is_server_admin,
+        )
         return
 
-    if lowered in (f"{PREFIX} chat", f"{PREFIX} longchat"):
+    # Change chat mode
+    if lowered in (
+        f"{PREFIX} chat",
+        f"{PREFIX} longchat",
+    ):
         COMMANDS_USED += 1
 
         if message.guild is None:
@@ -162,13 +188,16 @@ async def on_message(message):
         )
 
         set_chat_mode(message.guild.id, mode)
-        await message.reply(f"Veyra mode set to **{mode}**.")
+        await message.reply(
+            f"Veyra mode set to **{mode}**."
+        )
         return
 
-    # Other commands must not be treated as ordinary AI messages.
+    # Don't interpret unknown bot commands as AI questions
     if lowered.startswith(PREFIX + " "):
         return
 
+    # AI chat is only available in configured server channels
     if message.guild is None:
         return
 
@@ -178,51 +207,57 @@ async def on_message(message):
     guild_id = message.guild.id
     user_id = message.author.id
 
-    # Save an explicit language preference for this user only.
-    language = detect_language_preference(content)
-    if language:
-        set_preference(
+    try:
+        # Save an explicitly requested language preference
+        language = detect_language_preference(content)
+
+        if language:
+            set_preference(
+                guild_id,
+                user_id,
+                "language",
+                language,
+            )
+
+        # Store the user message and summarize older messages
+        overflow = add_message(
             guild_id,
             user_id,
-            "language",
-            language,
+            "user",
+            content,
         )
 
-    # Store the user's message and summarize anything pushed out
-    # of the 15-message rolling history.
-    overflow = add_message(
-        guild_id,
-        user_id,
-        "user",
-        content,
-    )
+        await summarize_overflow(
+            guild_id,
+            user_id,
+            overflow,
+        )
 
-    await summarize_overflow(
-        guild_id,
-        user_id,
-        overflow,
-    )
+        memory = get_user_memory(guild_id, user_id)
+        history = get_recent_history(guild_id, user_id)
+        mode = get_chat_mode(guild_id)
 
-    memory = get_user_memory(guild_id, user_id)
-    history = get_recent_history(guild_id, user_id)
-    mode = get_chat_mode(guild_id)
-
-    try:
         COMMANDS_USED += 1
 
         async with message.channel.typing():
             response = await ask_veyra(
                 content,
-                mode="deep" if mode == "longchat" else "chat",
+                mode=(
+                    "deep"
+                    if mode == "longchat"
+                    else "chat"
+                ),
                 memory_summary=memory.get("summary", ""),
                 preferences=memory.get("preferences", {}),
                 history=history,
             )
 
-        await send_long_message(message.channel, response)
+        await send_long_message(
+            message.channel,
+            response,
+        )
 
-        # Save the assistant response too, keeping the history
-        # limited to the most recent 15 messages.
+        # Store the AI response and summarize any overflow
         overflow = add_message(
             guild_id,
             user_id,
@@ -248,9 +283,7 @@ async def on_message(message):
 
 @bot.event
 async def on_guild_remove(guild):
-    from channel_manager import remove_guild_channels
-
-    remove_guild_channels(guild.id)
+    remove_chat_channel(guild.id)
 
 
 def main():
