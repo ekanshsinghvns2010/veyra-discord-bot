@@ -17,7 +17,7 @@ EMOJIS = {
     "servers": "🏠",
     "commands": "📊",
     "owner": "👑",
-    "uptime": "<a:online:1522248989087498463>",
+    "uptime": "<a:online:1560653233486045268>",
 }
 
 
