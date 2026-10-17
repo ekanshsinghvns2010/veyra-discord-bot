@@ -1,17 +1,13 @@
 
 import discord
 
-from memory_manager import (
-    get_user_memory,
-    clear_user_memory,
-)
+from memory_manager import get_user_memory
 
 
 async def handle_memory(message):
-    """Show the requesting user's memory privately through DMs."""
     if message.guild is None:
         await message.reply(
-            "Use this command in a server where Veyra is enabled."
+            "❄️ Use this command inside a server to view your memory."
         )
         return
 
@@ -22,52 +18,59 @@ async def handle_memory(message):
 
     summary = memory.get("summary", "").strip()
     preferences = memory.get("preferences", {})
-
-    lines = []
-
-    if summary:
-        lines.append("**Saved summary**\n" + summary)
-
-    if preferences:
-        lines.append(
-            "**Preferences**\n"
-            + "\n".join(
-                f"• {name}: {value}"
-                for name, value in preferences.items()
-            )
-        )
-
-    if not lines:
-        lines.append(
-            "Veyra hasn't saved any summary or preferences for you yet."
-        )
+    language = preferences.get("language", "Not set")
 
     embed = discord.Embed(
-        title="Your Veyra Memory",
-        description="\n\n".join(lines),
-        color=discord.Color.blurple(),
+        title="❄️ VEYRA AI",
+        description=(
+            "**YOUR MEMORY PROFILE**\n"
+            "What Veyra currently remembers about you."
+        ),
+        color=discord.Color.from_rgb(35, 160, 255),
     )
+
+    embed.add_field(
+        name="🧠 MEMORY SUMMARY",
+        value=(
+            summary[:4000]
+            if summary
+            else "No memory summary yet. Chat with Veyra to build one."
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="🌐 LANGUAGE PREFERENCE",
+        value=f"**{discord.utils.escape_markdown(str(language))}**",
+        inline=False,
+    )
+
     embed.set_footer(
-        text="This shows saved notes and preferences, not every recent message."
+        text="VEYRA AI • Your memory, your control"
     )
 
     try:
         await message.author.send(embed=embed)
-        await message.reply("I've sent your memory to you in DMs.")
+        await message.reply(
+            "❄️ I've sent your memory profile to your DMs.",
+            mention_author=False,
+        )
     except discord.Forbidden:
         await message.reply(
-            "I couldn't DM you. Please allow direct messages from "
-            "server members, then try again."
+            "I couldn't DM you. Please enable direct messages "
+            "from server members and try again.",
+            mention_author=False,
         )
 
 
 async def handle_forget(message):
-    """Clear only the requesting user's memory for this server."""
     if message.guild is None:
         await message.reply(
-            "Use this command in the server whose memory you want to clear."
+            "Please use this command inside a server."
         )
         return
+
+    from memory_manager import clear_user_memory
 
     removed = clear_user_memory(
         message.guild.id,
@@ -76,9 +79,11 @@ async def handle_forget(message):
 
     if removed:
         await message.reply(
-            "Your saved memory for this server has been cleared."
+            "🧹 Your saved memory for this server has been cleared.",
+            mention_author=False,
         )
     else:
         await message.reply(
-            "You don't have any saved memory for this server yet."
+            "You don't have any saved memory to clear.",
+            mention_author=False,
         )
