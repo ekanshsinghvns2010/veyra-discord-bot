@@ -204,7 +204,6 @@ async def on_message(message):
     lowered = content.lower()
 
     try:
-
         # ------------------------------------------
         # PING
         # ------------------------------------------
@@ -248,9 +247,11 @@ async def on_message(message):
         if lowered == f"{PREFIX} forget":
             COMMANDS_USED += 1
 
+            guild_id = message.guild.id if message.guild else 0
+
             clear_user_memory(
+                guild_id,
                 message.author.id,
-                message.guild.id if message.guild else 0,
             )
 
             await safe_reply(
@@ -302,7 +303,6 @@ async def on_message(message):
                 )
                 return
 
-            # setchannel.py expects (message, bot, permission_check)
             await handle_setchannel(
                 message,
                 client,
@@ -335,7 +335,6 @@ async def on_message(message):
                 )
                 return
 
-            # removechannel.py expects (message, permission_check)
             await handle_removechannel(
                 message,
                 is_admin,
@@ -398,8 +397,8 @@ async def on_message(message):
             return
 
         guild_id = message.guild.id
+        user_id = message.author.id
 
-        # get_chat_channels requires a guild ID and returns set[int].
         chat_channels = get_chat_channels(guild_id)
 
         if message.channel.id not in chat_channels:
@@ -422,9 +421,8 @@ async def on_message(message):
         # MEMORY AND AI
         # ------------------------------------------
 
-        user_id = message.author.id
-
-        memory = get_user_memory(user_id, guild_id)
+        # IMPORTANT: memory_manager expects guild_id first.
+        memory = get_user_memory(guild_id, user_id)
 
         if not isinstance(memory, dict):
             memory = {}
@@ -435,7 +433,7 @@ async def on_message(message):
         if not isinstance(preferences, dict):
             preferences = {}
 
-        history = get_recent_history(user_id, guild_id)
+        history = get_recent_history(guild_id, user_id)
 
         if not isinstance(history, list):
             history = []
@@ -450,8 +448,8 @@ async def on_message(message):
             or "hindi me reply" in lower_content
         ):
             set_preference(
-                user_id,
                 guild_id,
+                user_id,
                 "language",
                 "Hindi",
             )
@@ -462,17 +460,19 @@ async def on_message(message):
             or "speak english" in lower_content
         ):
             set_preference(
-                user_id,
                 guild_id,
+                user_id,
                 "language",
                 "English",
             )
             preferences["language"] = "English"
 
-        # Save user message.
+        # Save the current user message.
+        # The AI client also receives prompt=content and avoids
+        # duplicating this message if it is already in history.
         add_message(
-            user_id,
             guild_id,
+            user_id,
             "user",
             content,
         )
@@ -496,10 +496,10 @@ async def on_message(message):
 
         reply = str(reply)
 
-        # Save assistant reply.
+        # Save assistant reply using the same memory key.
         add_message(
-            user_id,
             guild_id,
+            user_id,
             "assistant",
             reply,
         )
