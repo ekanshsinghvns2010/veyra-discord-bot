@@ -1,6 +1,8 @@
 
+import os
+import time
+
 import discord
-from discord.utils import utcnow
 
 from config import PREFIX
 from channel_manager import (
@@ -12,7 +14,6 @@ from memory_manager import (
     get_user_memory,
     get_recent_history,
     add_message,
-    update_summary,
     set_preference,
     clear_user_memory,
 )
@@ -30,6 +31,10 @@ except ImportError:
     handle_shop = None
 
 
+# --------------------------------------------------
+# DISCORD CLIENT AND RUNTIME STATS
+# --------------------------------------------------
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -38,6 +43,7 @@ intents.members = True
 client = discord.Client(intents=intents)
 
 COMMANDS_USED = 0
+START_TIME = time.monotonic()
 
 
 # --------------------------------------------------
@@ -52,6 +58,14 @@ def is_admin(member):
         member.guild_permissions.administrator
         or member.guild_permissions.manage_guild
     )
+
+
+def get_message_content(message):
+    return (message.content or "").strip()
+
+
+def is_command(content):
+    return content.lower().startswith(PREFIX.lower())
 
 
 def looks_like_coding_request(content):
@@ -121,14 +135,6 @@ async def send_coding_upgrade_embed(message):
     await message.reply(embed=embed, mention_author=False)
 
 
-def get_message_content(message):
-    return (message.content or "").strip()
-
-
-def is_command(content):
-    return content.lower().startswith(PREFIX.lower())
-
-
 # --------------------------------------------------
 # STARTUP
 # --------------------------------------------------
@@ -164,7 +170,6 @@ async def on_guild_remove(guild):
 async def on_message(message):
     global COMMANDS_USED
 
-    # Ignore the bot itself and other bots.
     if message.author.bot:
         return
 
@@ -175,13 +180,16 @@ async def on_message(message):
 
     lowered = content.lower()
 
-    # ----------------------------------------------
-    # COMMANDS
-    # ----------------------------------------------
+    # ---------------- COMMANDS ----------------
 
     if lowered == f"{PREFIX} ping":
         COMMANDS_USED += 1
-        await handle_ping(message, bot, start_time, commands_used)
+        await handle_ping(
+            message,
+            client,
+            START_TIME,
+            COMMANDS_USED,
+        )
         return
 
     if lowered in (f"{PREFIX} help", f"{PREFIX} guide"):
@@ -196,6 +204,7 @@ async def on_message(message):
 
     if lowered == f"{PREFIX} forget":
         COMMANDS_USED += 1
+
         try:
             clear_user_memory(
                 message.author.id,
@@ -227,7 +236,11 @@ async def on_message(message):
         await handle_shop(message, PREFIX)
         return
 
-    if lowered.startswith(f"{PREFIX} setchannel"):
+    # ---------------- SET CHAT CHANNEL ----------------
+
+    if lowered == f"{PREFIX} setchannel" or lowered.startswith(
+        f"{PREFIX} setchannel "
+    ):
         COMMANDS_USED += 1
 
         if message.guild is None:
@@ -248,7 +261,11 @@ async def on_message(message):
         await handle_setchannel(message)
         return
 
-    if lowered.startswith(f"{PREFIX} removechannel"):
+    # ---------------- REMOVE CHAT CHANNEL ----------------
+
+    if lowered == f"{PREFIX} removechannel" or lowered.startswith(
+        f"{PREFIX} removechannel "
+    ):
         COMMANDS_USED += 1
 
         if message.guild is None:
@@ -269,11 +286,7 @@ async def on_message(message):
         await handle_removechannel(message)
         return
 
-    # ----------------------------------------------
-    # MODE COMMANDS
-    # !veyra chat
-    # !veyra longchat
-    # ----------------------------------------------
+    # ---------------- CHAT MODE ----------------
 
     if lowered in (f"{PREFIX} chat", f"{PREFIX} longchat"):
         COMMANDS_USED += 1
@@ -293,18 +306,18 @@ async def on_message(message):
             return
 
         new_mode = (
-            "deep"
+            "longchat"
             if lowered == f"{PREFIX} longchat"
             else "chat"
         )
 
         try:
-            set_mode(message.guild.id, new_mode)
+            set_chat_mode(message.guild.id, new_mode)
 
             label = (
-                "Deep Chat"
-                if new_mode == "deep"
-                else "Standard Chat"
+                "Detailed Chat"
+                if new_mode == "longchat"
+                else "Quick Chat"
             )
 
             await message.reply(
@@ -319,13 +332,11 @@ async def on_message(message):
             )
         return
 
-    # Ignore any other prefix command.
+    # Ignore unknown prefix commands.
     if is_command(content):
         return
 
-    # ----------------------------------------------
-    # AI CHAT CHANNEL CHECK
-    # ----------------------------------------------
+    # ---------------- AI CHAT CHANNEL CHECK ----------------
 
     if message.guild is None:
         return
@@ -336,7 +347,6 @@ async def on_message(message):
         print(f"Channel lookup error: {error}")
         return
 
-    # Supports channel mappings keyed by guild ID.
     guild_id = message.guild.id
     configured_channel = None
 
@@ -346,7 +356,6 @@ async def on_message(message):
             or chat_channels.get(str(guild_id))
         )
 
-        # Some implementations store channel IDs inside a nested object.
         if isinstance(configured_channel, dict):
             configured_channel = (
                 configured_channel.get("chat_channel")
@@ -364,17 +373,13 @@ async def on_message(message):
     if message.channel.id != configured_channel:
         return
 
-    # ----------------------------------------------
-    # CODING ROUTER
-    # ----------------------------------------------
+    # ---------------- CODING ROUTER ----------------
 
     if looks_like_coding_request(content):
         await send_coding_upgrade_embed(message)
         return
 
-    # ----------------------------------------------
-    # AI + PERSONAL MEMORY
-    # ----------------------------------------------
+    # ---------------- AI AND PERSONAL MEMORY ----------------
 
     user_id = message.author.id
 
@@ -395,7 +400,7 @@ async def on_message(message):
         if not isinstance(history, list):
             history = []
 
-        # Detect a simple explicit language preference.
+        # Detect explicit language preferences.
         lower_content = content.lower()
 
         if (
@@ -424,7 +429,7 @@ async def on_message(message):
             )
             preferences["language"] = "English"
 
-        # Save the user's message before requesting a response.
+        # Save the user's message.
         add_message(
             user_id,
             guild_id,
@@ -432,7 +437,8 @@ async def on_message(message):
             content,
         )
 
-        mode = get_mode(guild_id)
+        # Use the actual mode manager API.
+        mode = get_chat_mode(guild_id)
 
         async with message.channel.typing():
             reply = await ask_veyra(
@@ -444,9 +450,12 @@ async def on_message(message):
             )
 
         if not reply:
-            reply = "I couldn't generate a response just now. Please try again."
+            reply = (
+                "I couldn't generate a response just now. "
+                "Please try again."
+            )
 
-        # Save the assistant's response for future context.
+        # Save Veyra's reply for future context.
         add_message(
             user_id,
             guild_id,
@@ -454,9 +463,9 @@ async def on_message(message):
             str(reply),
         )
 
-        # Discord message limit is 2000 characters.
         reply = str(reply)
 
+        # Stay within Discord's message-length limit.
         if len(reply) <= 1900:
             await message.reply(
                 reply,
@@ -464,7 +473,9 @@ async def on_message(message):
             )
         else:
             for start in range(0, len(reply), 1900):
-                await message.channel.send(reply[start:start + 1900])
+                await message.channel.send(
+                    reply[start:start + 1900]
+                )
 
     except Exception as error:
         print(f"AI message error: {error}")
@@ -484,8 +495,6 @@ async def on_message(message):
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-
     token = os.getenv("DISCORD_BOT_TOKEN")
 
     if not token:
