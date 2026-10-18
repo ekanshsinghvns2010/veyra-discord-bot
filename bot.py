@@ -181,7 +181,7 @@ async def on_message(message):
 
     if lowered == f"{PREFIX} ping":
         COMMANDS_USED += 1
-        await handle_ping(message)
+        await handle_ping(message, bot, start_time, commands_used)
         return
 
     if lowered in (f"{PREFIX} help", f"{PREFIX} guide"):
