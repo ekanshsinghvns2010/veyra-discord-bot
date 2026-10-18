@@ -26,11 +26,12 @@ def build_help_embed(language: str, prefix: str) -> discord.Embed:
         embed.add_field(
             name="⚡ सामान्य कमांड",
             value=(
-                f"`{prefix} help` — यह सहायता मेनू खोलें\n"
+                f"`{prefix} help` — सहायता मेनू खोलें\n"
                 f"`{prefix} guide` — उपयोग गाइड देखें\n"
                 f"`{prefix} ping` — बॉट की स्थिति जाँचें\n"
                 f"`{prefix} memory` — अपनी सेव की गई मेमोरी देखें\n"
-                f"`{prefix} forget` — अपनी मेमोरी मिटाएँ"
+                f"`{prefix} forget` — अपनी मेमोरी मिटाएँ\n"
+                f"`{prefix} shop` — Code Pro, Study Pro और Deep Research देखें"
             ),
             inline=False,
         )
@@ -49,10 +50,11 @@ def build_help_embed(language: str, prefix: str) -> discord.Embed:
         embed.add_field(
             name="🌌 VEYRA का उपयोग कैसे करें",
             value=(
-                "**01**  निर्धारित चैट चैनल में सवाल पूछें।\n"
-                "**02**  अपनी पसंदीदा भाषा में बात करें।\n"
-                "**03**  `memory` से अपनी सेव की गई जानकारी देखें।\n"
-                "**04**  `forget` से अपनी मेमोरी साफ़ करें।"
+                "**01** सवाल पूछने के लिए निर्धारित चैट चैनल का उपयोग करें।\n"
+                "**02** अपनी पसंदीदा भाषा में बात करें।\n"
+                "**03** `memory` से सेव की गई जानकारी देखें।\n"
+                "**04** `forget` से अपनी मेमोरी साफ़ करें।\n"
+                "**05** `shop` से उपलब्ध प्रीमियम विकल्प देखें।"
             ),
             inline=False,
         )
@@ -87,7 +89,8 @@ def build_help_embed(language: str, prefix: str) -> discord.Embed:
                 f"`{prefix} guide` — Open the help guide\n"
                 f"`{prefix} ping` — Check bot status\n"
                 f"`{prefix} memory` — View your saved memory privately\n"
-                f"`{prefix} forget` — Clear your saved memory"
+                f"`{prefix} forget` — Clear your saved memory\n"
+                f"`{prefix} shop` — Explore Code Pro, Study Pro & Deep Research"
             ),
             inline=False,
         )
@@ -106,10 +109,11 @@ def build_help_embed(language: str, prefix: str) -> discord.Embed:
         embed.add_field(
             name="🌌 HOW TO USE VEYRA",
             value=(
-                "**01**  Ask questions in the configured chat channel.\n"
-                "**02**  Chat naturally in your preferred language.\n"
-                "**03**  Use `memory` to review saved context.\n"
-                "**04**  Use `forget` to clear your saved memory."
+                "**01** Ask questions in the configured chat channel.\n"
+                "**02** Chat naturally in your preferred language.\n"
+                "**03** Use `memory` to review saved context.\n"
+                "**04** Use `forget` to clear your saved memory.\n"
+                "**05** Use `shop` to explore premium options."
             ),
             inline=False,
         )
@@ -124,8 +128,12 @@ def build_help_embed(language: str, prefix: str) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="VEYRA AI • Powered by Volbasty Studios")
+    embed.set_footer(
+        text="VEYRA AI • Powered by Volbasty Studios"
+    )
+
     return embed
+
 
 class HelpLanguageSelect(discord.ui.Select):
     def __init__(self, owner_id: int, prefix: str):
@@ -153,13 +161,13 @@ class HelpLanguageSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="veyra_help_language",
         )
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "This language menu belongs to the person who opened it.",
+                "Only the person who opened this help menu "
+                "can change its language.",
                 ephemeral=True,
             )
             return
@@ -182,6 +190,8 @@ class HelpView(discord.ui.View):
 
 
 async def handle_help(message, prefix=None):
+    """Send Veyra's help menu with a language selector."""
+
     if prefix is None:
         prefix = PREFIX
 
