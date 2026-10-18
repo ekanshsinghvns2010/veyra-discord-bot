@@ -258,7 +258,11 @@ async def on_message(message):
             )
             return
 
-        await handle_setchannel(message)
+        await handle_setchannel(
+    message,
+    client,
+    permission_check
+)
         return
 
     # ---------------- REMOVE CHAT CHANNEL ----------------
