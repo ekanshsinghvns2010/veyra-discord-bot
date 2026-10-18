@@ -1,5 +1,6 @@
 
 import os
+
 from openai import AsyncOpenAI
 
 from config import (
@@ -54,20 +55,22 @@ preference when one is provided.
 def _memory_context(summary, preferences):
     sections = []
 
-    if summary and summary.strip():
+    if isinstance(summary, str) and summary.strip():
         sections.append(
             "Saved notes about this user:\n" + summary.strip()
         )
 
-    if preferences:
+    if isinstance(preferences, dict):
         lines = [
             f"- {name}: {value}"
             for name, value in preferences.items()
             if isinstance(name, str) and isinstance(value, str)
         ]
+
         if lines:
             sections.append(
-                "This user's saved preferences:\n" + "\n".join(lines)
+                "This user's saved preferences:\n"
+                + "\n".join(lines)
             )
 
     if not sections:
@@ -87,33 +90,56 @@ async def ask_veyra(
     preferences=None,
     history=None,
 ):
+    is_detailed = mode in {"deep", "longchat"}
+
     system_prompt = BASE_PROMPT
 
-    if mode == "deep":
+    if is_detailed:
         system_prompt += "\n" + DEEP_PROMPT
-        token_limit = 5000
+        token_limit = max(MAX_TOKENS, 5000)
     else:
         system_prompt += "\n" + CHAT_PROMPT
-        token_limit = 500
+        token_limit = min(MAX_TOKENS, 500)
 
     system_prompt += _memory_context(
         memory_summary,
         preferences or {},
     )
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
+    ]
 
-    if history:
+    # Add valid conversation history.
+    if isinstance(history, list):
         for item in history:
+            if not isinstance(item, dict):
+                continue
+
             role = item.get("role")
             content = item.get("content")
 
-            if role in {"user", "assistant"} and isinstance(content, str):
-                messages.append({
-                    "role": role,
-                    "content": content,
-                })
-    else:
+            if role not in {"user", "assistant"}:
+                continue
+
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            messages.append({
+                "role": role,
+                "content": content,
+            })
+
+    # Critical fix: always include the newest user message.
+    # Avoid adding it twice if it is already the last history item.
+    if not (
+        len(messages) > 1
+        and messages[-1]["role"] == "user"
+        and messages[-1]["content"] == prompt
+    ):
         messages.append({
             "role": "user",
             "content": prompt,
@@ -130,7 +156,10 @@ async def ask_veyra(
     finish_reason = response.choices[0].finish_reason
 
     if finish_reason == "length":
-        answer += "\n\n*This answer may be incomplete because of the response limit.*"
+        answer += (
+            "\n\n*This answer may be incomplete because of "
+            "the response limit.*"
+        )
 
     return answer
 
@@ -183,4 +212,6 @@ async def summarize_memory(previous_summary, older_messages):
         temperature=0.2,
     )
 
-    return (response.choices[0].message.content or "").strip()[:3000]
+    return (
+        response.choices[0].message.content or ""
+    ).strip()[:3000]
