@@ -1,5 +1,7 @@
+
 import os
 import time
+import traceback
 
 import discord
 
@@ -30,9 +32,9 @@ except ImportError:
     handle_shop = None
 
 
-# --------------------------------------------------
-# DISCORD CLIENT AND RUNTIME STATS
-# --------------------------------------------------
+# ==================================================
+# DISCORD CLIENT
+# ==================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -45,13 +47,17 @@ COMMANDS_USED = 0
 START_TIME = time.monotonic()
 
 
-# --------------------------------------------------
+# ==================================================
 # HELPERS
-# --------------------------------------------------
+# ==================================================
 
-def is_admin(member):
-    """Allow server owners and members with admin/manage permissions."""
+def is_admin(member, guild=None):
+    """Check server owner, Administrator, or Manage Server permission."""
+
     if not isinstance(member, discord.Member):
+        return False
+
+    if guild is not None and member.guild.id != guild.id:
         return False
 
     return (
@@ -136,40 +142,52 @@ async def send_coding_upgrade_embed(message):
     await message.reply(embed=embed, mention_author=False)
 
 
-# --------------------------------------------------
+async def safe_reply(message, content):
+    """Send an error or status reply without crashing the handler."""
+
+    try:
+        await message.reply(content, mention_author=False)
+    except Exception as error:
+        print(f"[REPLY ERROR] {error}")
+
+
+# ==================================================
 # STARTUP
-# --------------------------------------------------
+# ==================================================
 
 @client.event
 async def on_ready():
-    print("=" * 40)
-    print(f"Veyra AI connected as {client.user}")
-    print(f"Bot ID: {client.user.id}")
-    print(f"Prefix: {PREFIX}")
-    print("Memory system: enabled")
-    print("Ready to receive messages.")
-    print("=" * 40)
+    print("=" * 48)
+    print(f"[READY] Veyra AI connected as {client.user}")
+    print(f"[READY] Bot ID: {client.user.id}")
+    print(f"[READY] Prefix: {PREFIX}")
+    print("[READY] Memory system: enabled")
+    print("[READY] Channel configuration: file-backed")
+    print("[READY] Waiting for messages...")
+    print("=" * 48)
 
 
-# --------------------------------------------------
-# GUILD EVENTS
-# --------------------------------------------------
+# ==================================================
+# SERVER CLEANUP
+# ==================================================
 
 @client.event
 async def on_guild_remove(guild):
-    """Remove saved channel settings when Veyra leaves a server."""
+    """Delete channel settings only when Veyra leaves a server."""
+
     try:
         remove_guild_channels(guild.id)
         print(
-            f"Removed saved channel settings for server {guild.id}"
+            f"[GUILD] Removed saved channels for server {guild.id}"
         )
-    except Exception as error:
-        print(f"Guild cleanup error: {error}")
+    except Exception:
+        print("[GUILD ERROR] Could not clean up server settings.")
+        traceback.print_exc()
 
 
-# --------------------------------------------------
+# ==================================================
 # MESSAGE HANDLER
-# --------------------------------------------------
+# ==================================================
 
 @client.event
 async def on_message(message):
@@ -185,166 +203,175 @@ async def on_message(message):
 
     lowered = content.lower()
 
-    # ---------------- PING ----------------
+    try:
 
-    if lowered == f"{PREFIX} ping":
-        COMMANDS_USED += 1
+        # ------------------------------------------
+        # PING
+        # ------------------------------------------
 
-        await handle_ping(
-            message,
-            client,
-            START_TIME,
-            COMMANDS_USED,
-        )
-        return
+        if lowered == f"{PREFIX} ping":
+            COMMANDS_USED += 1
 
-    # ---------------- HELP ----------------
+            await handle_ping(
+                message,
+                client,
+                START_TIME,
+                COMMANDS_USED,
+            )
+            return
 
-    if lowered in (
-        f"{PREFIX} help",
-        f"{PREFIX} guide",
-    ):
-        COMMANDS_USED += 1
-        await handle_help(message, PREFIX)
-        return
+        # ------------------------------------------
+        # HELP
+        # ------------------------------------------
 
-    # ---------------- MEMORY ----------------
+        if lowered in (
+            f"{PREFIX} help",
+            f"{PREFIX} guide",
+        ):
+            COMMANDS_USED += 1
+            await handle_help(message, PREFIX)
+            return
 
-    if lowered == f"{PREFIX} memory":
-        COMMANDS_USED += 1
-        await handle_memory(message)
-        return
+        # ------------------------------------------
+        # MEMORY
+        # ------------------------------------------
 
-    # ---------------- FORGET MEMORY ----------------
+        if lowered == f"{PREFIX} memory":
+            COMMANDS_USED += 1
+            await handle_memory(message)
+            return
 
-    if lowered == f"{PREFIX} forget":
-        COMMANDS_USED += 1
+        # ------------------------------------------
+        # FORGET MEMORY
+        # ------------------------------------------
 
-        try:
+        if lowered == f"{PREFIX} forget":
+            COMMANDS_USED += 1
+
             clear_user_memory(
                 message.author.id,
                 message.guild.id if message.guild else 0,
             )
 
-            await message.reply(
+            await safe_reply(
+                message,
                 "🧹 Your saved Veyra conversation memory has been cleared.",
-                mention_author=False,
-            )
-
-        except Exception as error:
-            print(f"Memory clear error: {error}")
-
-            await message.reply(
-                "I couldn't clear your memory right now. Please try again.",
-                mention_author=False,
-            )
-
-        return
-
-    # ---------------- SHOP ----------------
-
-    if lowered == f"{PREFIX} shop":
-        COMMANDS_USED += 1
-
-        if handle_shop is None:
-            await message.reply(
-                "🛍️ The shop module isn't installed yet. "
-                "Add `commands/shop.py` and try again.",
-                mention_author=False,
             )
             return
 
-        await handle_shop(message, PREFIX)
-        return
+        # ------------------------------------------
+        # SHOP
+        # ------------------------------------------
 
-    # ---------------- SET CHAT CHANNEL ----------------
+        if lowered == f"{PREFIX} shop":
+            COMMANDS_USED += 1
 
-    if (
-        lowered == f"{PREFIX} setchannel"
-        or lowered.startswith(f"{PREFIX} setchannel ")
-    ):
-        COMMANDS_USED += 1
+            if handle_shop is None:
+                await safe_reply(
+                    message,
+                    "🛍️ The shop module isn't installed yet. "
+                    "Add commands/shop.py first.",
+                )
+                return
 
-        if message.guild is None:
-            await message.reply(
-                "Run this command inside your server.",
-                mention_author=False,
+            await handle_shop(message, PREFIX)
+            return
+
+        # ------------------------------------------
+        # SET CHAT CHANNEL
+        # ------------------------------------------
+
+        if (
+            lowered == f"{PREFIX} setchannel"
+            or lowered.startswith(f"{PREFIX} setchannel ")
+        ):
+            COMMANDS_USED += 1
+
+            if message.guild is None:
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
+                return
+
+            if not is_admin(message.author, message.guild):
+                await safe_reply(
+                    message,
+                    "🔒 You need Administrator or Manage Server "
+                    "permission to configure Veyra.",
+                )
+                return
+
+            # setchannel.py expects (message, bot, permission_check)
+            await handle_setchannel(
+                message,
+                client,
+                is_admin,
             )
             return
 
-        if not is_admin(message.author):
-            await message.reply(
-                "🔒 You need Administrator or Manage Server "
-                "permission to change the AI chat channel.",
-                mention_author=False,
+        # ------------------------------------------
+        # REMOVE CHAT CHANNEL
+        # ------------------------------------------
+
+        if (
+            lowered == f"{PREFIX} removechannel"
+            or lowered.startswith(f"{PREFIX} removechannel ")
+        ):
+            COMMANDS_USED += 1
+
+            if message.guild is None:
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
+                return
+
+            if not is_admin(message.author, message.guild):
+                await safe_reply(
+                    message,
+                    "🔒 You need Administrator or Manage Server "
+                    "permission to manage Veyra's channels.",
+                )
+                return
+
+            # removechannel.py expects (message, permission_check)
+            await handle_removechannel(
+                message,
+                is_admin,
             )
             return
 
-        await handle_setchannel(
-            message,
-            client,
-            is_admin,
-        )
-        return
+        # ------------------------------------------
+        # CHAT MODE
+        # ------------------------------------------
 
-    # ---------------- REMOVE CHAT CHANNEL ----------------
+        if lowered in (
+            f"{PREFIX} chat",
+            f"{PREFIX} longchat",
+        ):
+            COMMANDS_USED += 1
 
-    if (
-        lowered == f"{PREFIX} removechannel"
-        or lowered.startswith(f"{PREFIX} removechannel ")
-    ):
-        COMMANDS_USED += 1
+            if message.guild is None:
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
+                return
 
-        if message.guild is None:
-            await message.reply(
-                "Run this command inside your server.",
-                mention_author=False,
+            if not is_admin(message.author, message.guild):
+                await safe_reply(
+                    message,
+                    "🔒 Only server administrators can change the AI mode.",
+                )
+                return
+
+            new_mode = (
+                "longchat"
+                if lowered == f"{PREFIX} longchat"
+                else "chat"
             )
-            return
 
-        if not is_admin(message.author):
-            await message.reply(
-                "🔒 You need Administrator or Manage Server "
-                "permission to remove the AI chat channel.",
-                mention_author=False,
-            )
-            return
-
-        await handle_removechannel(
-            message,
-            is_admin,
-        )
-        return
-
-    # ---------------- CHAT MODE ----------------
-
-    if lowered in (
-        f"{PREFIX} chat",
-        f"{PREFIX} longchat",
-    ):
-        COMMANDS_USED += 1
-
-        if message.guild is None:
-            await message.reply(
-                "Run this command inside your server.",
-                mention_author=False,
-            )
-            return
-
-        if not is_admin(message.author):
-            await message.reply(
-                "🔒 Only server administrators can change the AI mode.",
-                mention_author=False,
-            )
-            return
-
-        new_mode = (
-            "longchat"
-            if lowered == f"{PREFIX} longchat"
-            else "chat"
-        )
-
-        try:
             set_chat_mode(message.guild.id, new_mode)
 
             label = (
@@ -353,54 +380,50 @@ async def on_message(message):
                 else "Quick Chat"
             )
 
-            await message.reply(
+            await safe_reply(
+                message,
                 f"❄️ Veyra mode changed to **{label}**.",
-                mention_author=False,
             )
+            return
 
-        except Exception as error:
-            print(f"Mode update error: {error}")
+        # Ignore unknown commands.
+        if is_command(content):
+            return
 
-            await message.reply(
-                "I couldn't update the mode right now.",
-                mention_author=False,
-            )
+        # ------------------------------------------
+        # SERVER-ONLY AI CHAT
+        # ------------------------------------------
 
-        return
+        if message.guild is None:
+            return
 
-    # Ignore unknown prefix commands.
-    if is_command(content):
-        return
+        guild_id = message.guild.id
 
-    # ---------------- AI CHAT CHANNEL CHECK ----------------
-
-    if message.guild is None:
-        return
-
-    guild_id = message.guild.id
-
-    try:
+        # get_chat_channels requires a guild ID and returns set[int].
         chat_channels = get_chat_channels(guild_id)
 
-    except Exception as error:
-        print(f"Channel lookup error: {error}")
-        return
+        if message.channel.id not in chat_channels:
+            return
 
-    # channel_manager returns a set of channel IDs per server.
-    if message.channel.id not in chat_channels:
-        return
+        print(
+            f"[CHAT] Message received in configured channel "
+            f"{message.channel.id} (server {guild_id})"
+        )
 
-    # ---------------- CODING ROUTER ----------------
+        # ------------------------------------------
+        # CODING ROUTER
+        # ------------------------------------------
 
-    if looks_like_coding_request(content):
-        await send_coding_upgrade_embed(message)
-        return
+        if looks_like_coding_request(content):
+            await send_coding_upgrade_embed(message)
+            return
 
-    # ---------------- AI AND PERSONAL MEMORY ----------------
+        # ------------------------------------------
+        # MEMORY AND AI
+        # ------------------------------------------
 
-    user_id = message.author.id
+        user_id = message.author.id
 
-    try:
         memory = get_user_memory(user_id, guild_id)
 
         if not isinstance(memory, dict):
@@ -417,9 +440,9 @@ async def on_message(message):
         if not isinstance(history, list):
             history = []
 
-        # Detect explicit language preferences.
         lower_content = content.lower()
 
+        # Detect explicit language preferences.
         if (
             "reply in hindi" in lower_content
             or "speak hindi" in lower_content
@@ -446,7 +469,7 @@ async def on_message(message):
             )
             preferences["language"] = "English"
 
-        # Save the user's message.
+        # Save user message.
         add_message(
             user_id,
             guild_id,
@@ -471,17 +494,17 @@ async def on_message(message):
                 "Please try again."
             )
 
-        # Save Veyra's reply for future context.
+        reply = str(reply)
+
+        # Save assistant reply.
         add_message(
             user_id,
             guild_id,
             "assistant",
-            str(reply),
+            reply,
         )
 
-        reply = str(reply)
-
-        # Stay within Discord's message-length limit.
+        # Discord message length limit.
         if len(reply) <= 1900:
             await message.reply(
                 reply,
@@ -494,22 +517,19 @@ async def on_message(message):
                 )
 
     except Exception as error:
-        print(f"AI message error: {error}")
+        print(f"[MESSAGE ERROR] {type(error).__name__}: {error}")
+        traceback.print_exc()
 
-        try:
-            await message.reply(
-                "I couldn't process that message right now. "
-                "Please try again later.",
-                mention_author=False,
-            )
-
-        except Exception as send_error:
-            print(f"Error sending failure message: {send_error}")
+        await safe_reply(
+            message,
+            "I couldn't process that message right now. "
+            "Please try again later.",
+        )
 
 
-# --------------------------------------------------
+# ==================================================
 # RUN BOT
-# --------------------------------------------------
+# ==================================================
 
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
