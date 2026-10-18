@@ -16,7 +16,7 @@ from memory_manager import (
     set_preference,
     clear_user_memory,
 )
-from mode_manager import get_mode, set_mode
+from mode_manager import get_chat_mode, set_chat_mode
 
 from commands.ping import handle_ping
 from commands.help import handle_help
