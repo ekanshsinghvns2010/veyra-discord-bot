@@ -1,4 +1,3 @@
-
 import os
 import time
 
@@ -7,7 +6,7 @@ import discord
 from config import PREFIX
 from channel_manager import (
     get_chat_channels,
-    remove_chat_channel,
+    remove_guild_channels,
 )
 from ai_client import ask_veyra
 from memory_manager import (
@@ -51,11 +50,13 @@ START_TIME = time.monotonic()
 # --------------------------------------------------
 
 def is_admin(member):
+    """Allow server owners and members with admin/manage permissions."""
     if not isinstance(member, discord.Member):
         return False
 
     return (
-        member.guild_permissions.administrator
+        member.id == member.guild.owner_id
+        or member.guild_permissions.administrator
         or member.guild_permissions.manage_guild
     )
 
@@ -156,8 +157,12 @@ async def on_ready():
 
 @client.event
 async def on_guild_remove(guild):
+    """Remove saved channel settings when Veyra leaves a server."""
     try:
-        remove_chat_channel(guild.id)
+        remove_guild_channels(guild.id)
+        print(
+            f"Removed saved channel settings for server {guild.id}"
+        )
     except Exception as error:
         print(f"Guild cleanup error: {error}")
 
@@ -180,10 +185,11 @@ async def on_message(message):
 
     lowered = content.lower()
 
-    # ---------------- COMMANDS ----------------
+    # ---------------- PING ----------------
 
     if lowered == f"{PREFIX} ping":
         COMMANDS_USED += 1
+
         await handle_ping(
             message,
             client,
@@ -192,15 +198,24 @@ async def on_message(message):
         )
         return
 
-    if lowered in (f"{PREFIX} help", f"{PREFIX} guide"):
+    # ---------------- HELP ----------------
+
+    if lowered in (
+        f"{PREFIX} help",
+        f"{PREFIX} guide",
+    ):
         COMMANDS_USED += 1
         await handle_help(message, PREFIX)
         return
+
+    # ---------------- MEMORY ----------------
 
     if lowered == f"{PREFIX} memory":
         COMMANDS_USED += 1
         await handle_memory(message)
         return
+
+    # ---------------- FORGET MEMORY ----------------
 
     if lowered == f"{PREFIX} forget":
         COMMANDS_USED += 1
@@ -210,17 +225,23 @@ async def on_message(message):
                 message.author.id,
                 message.guild.id if message.guild else 0,
             )
+
             await message.reply(
                 "🧹 Your saved Veyra conversation memory has been cleared.",
                 mention_author=False,
             )
+
         except Exception as error:
             print(f"Memory clear error: {error}")
+
             await message.reply(
                 "I couldn't clear your memory right now. Please try again.",
                 mention_author=False,
             )
+
         return
+
+    # ---------------- SHOP ----------------
 
     if lowered == f"{PREFIX} shop":
         COMMANDS_USED += 1
@@ -238,8 +259,9 @@ async def on_message(message):
 
     # ---------------- SET CHAT CHANNEL ----------------
 
-    if lowered == f"{PREFIX} setchannel" or lowered.startswith(
-        f"{PREFIX} setchannel "
+    if (
+        lowered == f"{PREFIX} setchannel"
+        or lowered.startswith(f"{PREFIX} setchannel ")
     ):
         COMMANDS_USED += 1
 
@@ -252,23 +274,24 @@ async def on_message(message):
 
         if not is_admin(message.author):
             await message.reply(
-                "🔒 You need Administrator or Manage Server permission "
-                "to change the AI chat channel.",
+                "🔒 You need Administrator or Manage Server "
+                "permission to change the AI chat channel.",
                 mention_author=False,
             )
             return
 
         await handle_setchannel(
-    message,
-    client,
-    permission_check
-)
+            message,
+            client,
+            is_admin,
+        )
         return
 
     # ---------------- REMOVE CHAT CHANNEL ----------------
 
-    if lowered == f"{PREFIX} removechannel" or lowered.startswith(
-        f"{PREFIX} removechannel "
+    if (
+        lowered == f"{PREFIX} removechannel"
+        or lowered.startswith(f"{PREFIX} removechannel ")
     ):
         COMMANDS_USED += 1
 
@@ -281,18 +304,24 @@ async def on_message(message):
 
         if not is_admin(message.author):
             await message.reply(
-                "🔒 You need Administrator or Manage Server permission "
-                "to remove the AI chat channel.",
+                "🔒 You need Administrator or Manage Server "
+                "permission to remove the AI chat channel.",
                 mention_author=False,
             )
             return
 
-        await handle_removechannel(message)
+        await handle_removechannel(
+            message,
+            is_admin,
+        )
         return
 
     # ---------------- CHAT MODE ----------------
 
-    if lowered in (f"{PREFIX} chat", f"{PREFIX} longchat"):
+    if lowered in (
+        f"{PREFIX} chat",
+        f"{PREFIX} longchat",
+    ):
         COMMANDS_USED += 1
 
         if message.guild is None:
@@ -328,12 +357,15 @@ async def on_message(message):
                 f"❄️ Veyra mode changed to **{label}**.",
                 mention_author=False,
             )
+
         except Exception as error:
             print(f"Mode update error: {error}")
+
             await message.reply(
                 "I couldn't update the mode right now.",
                 mention_author=False,
             )
+
         return
 
     # Ignore unknown prefix commands.
@@ -345,36 +377,17 @@ async def on_message(message):
     if message.guild is None:
         return
 
+    guild_id = message.guild.id
+
     try:
-        chat_channels = get_chat_channels()
+        chat_channels = get_chat_channels(guild_id)
+
     except Exception as error:
         print(f"Channel lookup error: {error}")
         return
 
-    guild_id = message.guild.id
-    configured_channel = None
-
-    if isinstance(chat_channels, dict):
-        configured_channel = (
-            chat_channels.get(guild_id)
-            or chat_channels.get(str(guild_id))
-        )
-
-        if isinstance(configured_channel, dict):
-            configured_channel = (
-                configured_channel.get("chat_channel")
-                or configured_channel.get("channel_id")
-            )
-
-    if configured_channel is None:
-        return
-
-    try:
-        configured_channel = int(configured_channel)
-    except (TypeError, ValueError):
-        return
-
-    if message.channel.id != configured_channel:
+    # channel_manager returns a set of channel IDs per server.
+    if message.channel.id not in chat_channels:
         return
 
     # ---------------- CODING ROUTER ----------------
@@ -441,7 +454,6 @@ async def on_message(message):
             content,
         )
 
-        # Use the actual mode manager API.
         mode = get_chat_mode(guild_id)
 
         async with message.channel.typing():
@@ -490,6 +502,7 @@ async def on_message(message):
                 "Please try again later.",
                 mention_author=False,
             )
+
         except Exception as send_error:
             print(f"Error sending failure message: {send_error}")
 
