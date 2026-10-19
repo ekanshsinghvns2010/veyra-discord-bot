@@ -1,38 +1,38 @@
 
 import os
+import discord
 
 
 def _load_ids(variable_name: str) -> set[int]:
-    """Load trusted Discord user IDs from a comma-separated environment variable."""
+    """Read comma-separated Discord IDs from environment variables."""
     raw = os.getenv(variable_name, "")
-    result = set()
+    ids = set()
 
     for item in raw.split(","):
         item = item.strip()
-
         if item.isdigit():
-            result.add(int(item))
+            ids.add(int(item))
 
-    return result
+    return ids
 
 
 def is_developer(user_id: int) -> bool:
-    """Only explicitly configured developer IDs receive developer access."""
+    """Only explicitly allowlisted users count as Veyra developers."""
     return user_id in _load_ids("VEYRA_DEVELOPER_IDS")
 
 
 def is_server_admin(member, guild=None) -> bool:
-    """Check server owner or Administrator/Manage Server permission."""
-    import discord
-
+    """Check whether a member owns or administers this server."""
     if not isinstance(member, discord.Member):
         return False
 
     if guild is not None and member.guild.id != guild.id:
         return False
 
+    permissions = member.guild_permissions
+
     return (
         member.id == member.guild.owner_id
-        or member.guild_permissions.administrator
-        or member.guild_permissions.manage_guild
+        or permissions.administrator
+        or permissions.manage_guild
     )
