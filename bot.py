@@ -19,7 +19,13 @@ from memory_manager import (
     clear_user_memory,
 )
 from mode_manager import get_chat_mode, set_chat_mode
-
+from commands.products import (
+    handle_products,
+    handle_product_command,
+    handle_grant_pro,
+    handle_ask_product,
+    PRODUCTS,
+)
 from commands.ping import handle_ping
 from commands.help import handle_help
 from commands.setchannel import handle_setchannel
@@ -277,6 +283,42 @@ async def on_message(message):
 
             await handle_shop(message, PREFIX)
             return
+
+
+        # ------------------------------------------
+        # PRODUCT WORKSPACES
+        # ------------------------------------------
+
+        product_parts = content.split(maxsplit=2)
+        command_root = PREFIX.lower()
+
+        if lowered == f"{command_root} products":
+            COMMANDS_USED += 1
+            await handle_products(message)
+            return
+
+        if len(product_parts) >= 2:
+            subcommand = product_parts[1].lower()
+
+            if subcommand in PRODUCTS:
+                COMMANDS_USED += 1
+
+                if len(product_parts) == 3:
+                    await handle_ask_product(
+                        message,
+                        subcommand,
+                        product_parts[2],
+                    )
+                else:
+                    await handle_product_command(message, subcommand)
+
+                return
+
+            if subcommand == "grantpro":
+                COMMANDS_USED += 1
+                await handle_grant_pro(message, product_parts)
+                return
+
 
         # ------------------------------------------
         # SET CHAT CHANNEL
