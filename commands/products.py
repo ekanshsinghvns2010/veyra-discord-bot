@@ -391,12 +391,18 @@ async def handle_ask_product(message, product_id, prompt):
         await reply_message.edit(embed=result)
 
     except Exception as error:
-        print(f"[PRODUCT ERROR] {product_id}: {type(error).__name__}: {error}")
+        print(
+            f"[PRODUCT ERROR] {product_id}: "
+            f"{type(error).__name__}: {error}",
+            flush=True,
+        )
+
         await reply_message.edit(
             embed=discord.Embed(
-                title="⚠️ Product temporarily unavailable",
+                title="⚠️ Veyra Debug",
                 description=(
-                    "Veyra couldn't complete that request. Please try again."
+                    f"Error type: `{type(error).__name__}`\n"
+                    f"Details: `{str(error)[:900]}`"
                 ),
                 color=discord.Color.orange(),
             )
