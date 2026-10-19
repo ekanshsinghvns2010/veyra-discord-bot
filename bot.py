@@ -10,6 +10,7 @@ from channel_manager import (
     get_chat_channels,
     remove_guild_channels,
 )
+from commands.code_pro import handle_code_pro
 from commands.research import handle_ask_research
 from ai_client import ask_veyra
 from memory_manager import (
@@ -159,7 +160,7 @@ async def safe_reply(message, content):
 
 
 # ==================================================
-# STARTUP
+# DISCORD CLIENT STARTUP
 # ==================================================
 
 @client.event
@@ -217,7 +218,6 @@ async def on_message(message):
 
         if lowered == f"{PREFIX} ping":
             COMMANDS_USED += 1
-
             await handle_ping(
                 message,
                 client,
@@ -285,7 +285,6 @@ async def on_message(message):
             await handle_shop(message, PREFIX)
             return
 
-
         # ------------------------------------------
         # PRODUCT WORKSPACES
         # ------------------------------------------
@@ -301,6 +300,36 @@ async def on_message(message):
         if len(product_parts) >= 2:
             subcommand = product_parts[1].lower()
 
+            # --------------------------------------
+            # CODE PRO
+            # --------------------------------------
+
+            if subcommand == "codepro":
+                COMMANDS_USED += 1
+
+                question = (
+                    product_parts[2]
+                    if len(product_parts) == 3
+                    else ""
+                )
+
+                handled = await handle_code_pro(
+                    message,
+                    question,
+                )
+
+                if not handled:
+                    await safe_reply(
+                        message,
+                        "Use `!veyra code` to open the coding workspace "
+                        "and learn about Code Free and Code Pro.",
+                    )
+
+                return
+
+            # --------------------------------------
+            # EXISTING PRODUCT COMMANDS
+            # --------------------------------------
 
             if subcommand in PRODUCTS:
                 COMMANDS_USED += 1
@@ -327,12 +356,14 @@ async def on_message(message):
 
                 return
 
+            # --------------------------------------
+            # GRANT PRO
+            # --------------------------------------
 
             if subcommand == "grantpro":
                 COMMANDS_USED += 1
                 await handle_grant_pro(message, product_parts)
                 return
-
 
         # ------------------------------------------
         # SET CHAT CHANNEL
@@ -477,7 +508,6 @@ async def on_message(message):
         # MEMORY AND AI
         # ------------------------------------------
 
-        # IMPORTANT: memory_manager expects guild_id first.
         memory = get_user_memory(guild_id, user_id)
 
         if not isinstance(memory, dict):
@@ -496,7 +526,6 @@ async def on_message(message):
 
         lower_content = content.lower()
 
-        # Detect explicit language preferences.
         if (
             "reply in hindi" in lower_content
             or "speak hindi" in lower_content
@@ -523,9 +552,6 @@ async def on_message(message):
             )
             preferences["language"] = "English"
 
-        # Save the current user message.
-        # The AI client also receives prompt=content and avoids
-        # duplicating this message if it is already in history.
         add_message(
             guild_id,
             user_id,
@@ -552,7 +578,6 @@ async def on_message(message):
 
         reply = str(reply)
 
-        # Save assistant reply using the same memory key.
         add_message(
             guild_id,
             user_id,
@@ -560,7 +585,6 @@ async def on_message(message):
             reply,
         )
 
-        # Discord message length limit.
         if len(reply) <= 1900:
             await message.reply(
                 reply,
