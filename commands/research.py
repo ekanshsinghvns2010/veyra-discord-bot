@@ -2,9 +2,10 @@
 import discord
 
 from ai_client import ask_veyra
-from commands.products import get_tier, PRODUCTS
+from commands.products import get_tier
 
 ICE_BLUE = discord.Color.from_rgb(42, 164, 255)
+MESSAGE_LIMIT = 1900
 
 
 def build_research_prompt(question):
@@ -23,6 +24,33 @@ Instructions:
 - Organize substantial research into a professional report.
 - If live search fails or produces no sources, clearly disclose that.
 """
+
+
+def split_message(text, limit=MESSAGE_LIMIT):
+    """Split text into Discord-safe chunks without cutting words when possible."""
+    text = str(text or "").strip()
+
+    if not text:
+        return ["Veyra returned an empty research report."]
+
+    chunks = []
+
+    while len(text) > limit:
+        split_at = text.rfind("\n", 0, limit + 1)
+
+        if split_at < limit // 2:
+            split_at = text.rfind(" ", 0, limit + 1)
+
+        if split_at < limit // 2:
+            split_at = limit
+
+        chunks.append(text[:split_at].strip())
+        text = text[split_at:].strip()
+
+    if text:
+        chunks.append(text)
+
+    return chunks
 
 
 async def handle_ask_research(message, question):
@@ -60,31 +88,20 @@ async def handle_ask_research(message, question):
             web_search=(tier == "pro"),
         )
 
-        answer = str(answer or "").strip()
+        chunks = split_message(answer)
 
-        if not answer:
-            answer = (
-                "Veyra received an empty response. "
-                "Please try again with a shorter research question."
-            )
-
-        # Discord embed descriptions have a 4096-character limit.
-        chunks = [
-            answer[i:i + 3900]
-            for i in range(0, len(answer), 3900)
-        ]
-
-        first = discord.Embed(
+        first_embed = discord.Embed(
             title="🔎 Veyra Research Report",
             description=chunks[0],
             color=ICE_BLUE,
         )
-        first.set_footer(
+        first_embed.set_footer(
             text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
         )
 
-        await status_message.edit(embed=first)
+        await status_message.edit(embed=first_embed)
 
+        # Send remaining report sections as safe-length messages.
         for chunk in chunks[1:]:
             await message.channel.send(chunk)
 
@@ -103,4 +120,9 @@ async def handle_ask_research(message, question):
             color=discord.Color.orange(),
         )
 
-        await status_message.edit(embed=error_embed)
+        try:
+            await status_message.edit(embed=error_embed)
+        except discord.HTTPException:
+            await message.channel.send(
+                "⚠️ Veyra couldn't complete this research request."
+            )
