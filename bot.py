@@ -10,8 +10,6 @@ from channel_manager import (
     get_chat_channels,
     remove_guild_channels,
 )
-from commands.code_pro import handle_code_pro
-from commands.research import handle_ask_research
 from ai_client import ask_veyra
 from memory_manager import (
     get_user_memory,
@@ -21,6 +19,10 @@ from memory_manager import (
     clear_user_memory,
 )
 from mode_manager import get_chat_mode, set_chat_mode
+
+from commands.logs import handle_logs
+from commands.code_pro import handle_code_pro
+from commands.research import handle_ask_research
 from commands.products import (
     handle_products,
     handle_product_command,
@@ -34,6 +36,8 @@ from commands.setchannel import handle_setchannel
 from commands.removechannel import handle_removechannel
 from commands.memory import handle_memory
 
+from security.permissions import is_developer
+
 try:
     from commands.shop import handle_shop
 except ImportError:
@@ -41,7 +45,7 @@ except ImportError:
 
 
 # ==================================================
-# DISCORD CLIENT
+# VEYRA CONFIGURATION
 # ==================================================
 
 intents = discord.Intents.default()
@@ -56,12 +60,11 @@ START_TIME = time.monotonic()
 
 
 # ==================================================
-# HELPERS
+# PERMISSIONS
 # ==================================================
 
 def is_admin(member, guild=None):
-    """Check server owner, Administrator, or Manage Server permission."""
-
+    """Server owner, Administrator, or Manage Server."""
     if not isinstance(member, discord.Member):
         return False
 
@@ -75,12 +78,33 @@ def is_admin(member, guild=None):
     )
 
 
+def is_server_manager(member, guild=None):
+    """Compatibility wrapper for existing admin command handlers."""
+    return is_admin(member, guild)
+
+
+# ==================================================
+# HELPERS
+# ==================================================
+
 def get_message_content(message):
     return (message.content or "").strip()
 
 
 def is_command(content):
     return content.lower().startswith(PREFIX.lower())
+
+
+async def safe_reply(message, content=None, **kwargs):
+    """Send a reply without allowing reply failures to crash the bot."""
+    try:
+        await message.reply(
+            content or "",
+            mention_author=False,
+            **kwargs,
+        )
+    except Exception as error:
+        print(f"[REPLY ERROR] {type(error).__name__}")
 
 
 def looks_like_coding_request(content):
@@ -139,28 +163,33 @@ async def send_coding_upgrade_embed(message):
 
     embed.add_field(
         name="🛍️ Explore the shop",
-        value="Use `!veyra shop` to explore Veyra's product options.",
+        value=f"Use `{PREFIX} shop` to explore Veyra's products.",
         inline=False,
     )
 
-    embed.set_footer(
-        text="VEYRA AI • Powered by Volbasty Studios"
-    )
-
+    embed.set_footer(text="VEYRA AI • Powered by Volbasty Studios")
     await message.reply(embed=embed, mention_author=False)
 
 
-async def safe_reply(message, content):
-    """Send an error or status reply without crashing the handler."""
+async def send_long_reply(message, text):
+    """Split long AI replies safely under Discord's message limit."""
+    text = str(text or "").strip()
 
-    try:
-        await message.reply(content, mention_author=False)
-    except Exception as error:
-        print(f"[REPLY ERROR] {error}")
+    if not text:
+        text = "I couldn't generate a response just now. Please try again."
+
+    # Discord message content is limited to 2000 characters.
+    for start in range(0, len(text), 1900):
+        chunk = text[start:start + 1900]
+
+        if start == 0:
+            await message.reply(chunk, mention_author=False)
+        else:
+            await message.channel.send(chunk)
 
 
 # ==================================================
-# DISCORD CLIENT STARTUP
+# STARTUP
 # ==================================================
 
 @client.event
@@ -171,6 +200,8 @@ async def on_ready():
     print(f"[READY] Prefix: {PREFIX}")
     print("[READY] Memory system: enabled")
     print("[READY] Channel configuration: file-backed")
+    print("[READY] Logging command: loaded")
+    print("[READY] Developer allowlist: loaded")
     print("[READY] Waiting for messages...")
     print("=" * 48)
 
@@ -181,13 +212,10 @@ async def on_ready():
 
 @client.event
 async def on_guild_remove(guild):
-    """Delete channel settings only when Veyra leaves a server."""
-
+    """Clean up saved chat-channel settings when leaving a server."""
     try:
         remove_guild_channels(guild.id)
-        print(
-            f"[GUILD] Removed saved channels for server {guild.id}"
-        )
+        print(f"[GUILD] Removed chat-channel settings for server {guild.id}")
     except Exception:
         print("[GUILD ERROR] Could not clean up server settings.")
         traceback.print_exc()
@@ -209,14 +237,15 @@ async def on_message(message):
     if not content:
         return
 
-    lowered = content.lower()
+    lowered = content.lower().strip()
+    prefix = PREFIX.lower()
 
     try:
         # ------------------------------------------
         # PING
         # ------------------------------------------
 
-        if lowered == f"{PREFIX} ping":
+        if lowered == f"{prefix} ping":
             COMMANDS_USED += 1
             await handle_ping(
                 message,
@@ -230,19 +259,25 @@ async def on_message(message):
         # HELP
         # ------------------------------------------
 
-        if lowered in (
-            f"{PREFIX} help",
-            f"{PREFIX} guide",
-        ):
+        if lowered in (f"{prefix} help", f"{prefix} guide"):
             COMMANDS_USED += 1
             await handle_help(message, PREFIX)
+            return
+
+        # ------------------------------------------
+        # SERVER LOGGING SETUP
+        # ------------------------------------------
+
+        if lowered == f"{prefix} logs":
+            COMMANDS_USED += 1
+            await handle_logs(message)
             return
 
         # ------------------------------------------
         # MEMORY
         # ------------------------------------------
 
-        if lowered == f"{PREFIX} memory":
+        if lowered == f"{prefix} memory":
             COMMANDS_USED += 1
             await handle_memory(message)
             return
@@ -251,15 +286,12 @@ async def on_message(message):
         # FORGET MEMORY
         # ------------------------------------------
 
-        if lowered == f"{PREFIX} forget":
+        if lowered == f"{prefix} forget":
             COMMANDS_USED += 1
 
             guild_id = message.guild.id if message.guild else 0
 
-            clear_user_memory(
-                guild_id,
-                message.author.id,
-            )
+            clear_user_memory(guild_id, message.author.id)
 
             await safe_reply(
                 message,
@@ -271,7 +303,7 @@ async def on_message(message):
         # SHOP
         # ------------------------------------------
 
-        if lowered == f"{PREFIX} shop":
+        if lowered == f"{prefix} shop":
             COMMANDS_USED += 1
 
             if handle_shop is None:
@@ -286,100 +318,17 @@ async def on_message(message):
             return
 
         # ------------------------------------------
-        # PRODUCT WORKSPACES
-        # ------------------------------------------
-
-        product_parts = content.split(maxsplit=2)
-        command_root = PREFIX.lower()
-
-        if lowered == f"{command_root} products":
-            COMMANDS_USED += 1
-            await handle_products(message)
-            return
-
-        if len(product_parts) >= 2:
-            subcommand = product_parts[1].lower()
-
-            # --------------------------------------
-            # CODE PRO
-            # --------------------------------------
-
-            if subcommand == "codepro":
-                COMMANDS_USED += 1
-
-                question = (
-                    product_parts[2]
-                    if len(product_parts) == 3
-                    else ""
-                )
-
-                handled = await handle_code_pro(
-                    message,
-                    question,
-                )
-
-                if not handled:
-                    await safe_reply(
-                        message,
-                        "Use `!veyra code` to open the coding workspace "
-                        "and learn about Code Free and Code Pro.",
-                    )
-
-                return
-
-            # --------------------------------------
-            # EXISTING PRODUCT COMMANDS
-            # --------------------------------------
-
-            if subcommand in PRODUCTS:
-                COMMANDS_USED += 1
-
-                if len(product_parts) == 3:
-                    question = product_parts[2]
-
-                    if subcommand == "research":
-                        await handle_ask_research(
-                            message,
-                            question,
-                        )
-                    else:
-                        await handle_ask_product(
-                            message,
-                            subcommand,
-                            question,
-                        )
-                else:
-                    await handle_product_command(
-                        message,
-                        subcommand,
-                    )
-
-                return
-
-            # --------------------------------------
-            # GRANT PRO
-            # --------------------------------------
-
-            if subcommand == "grantpro":
-                COMMANDS_USED += 1
-                await handle_grant_pro(message, product_parts)
-                return
-
-        # ------------------------------------------
-        # SET CHAT CHANNEL
+        # SERVER CHAT CHANNEL SETUP
         # ------------------------------------------
 
         if (
-            lowered == f"{PREFIX} setchannel"
-            or lowered.startswith(f"{PREFIX} setchannel ")
+            lowered == f"{prefix} setchannel"
+            or lowered.startswith(f"{prefix} setchannel ")
         ):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(
-                    message,
-                    "Run this command inside your server.",
-                )
+                await safe_reply(message, "Run this command inside your server.")
                 return
 
             if not is_admin(message.author, message.guild):
@@ -390,11 +339,7 @@ async def on_message(message):
                 )
                 return
 
-            await handle_setchannel(
-                message,
-                client,
-                is_admin,
-            )
+            await handle_setchannel(message, client, is_admin)
             return
 
         # ------------------------------------------
@@ -402,16 +347,13 @@ async def on_message(message):
         # ------------------------------------------
 
         if (
-            lowered == f"{PREFIX} removechannel"
-            or lowered.startswith(f"{PREFIX} removechannel ")
+            lowered == f"{prefix} removechannel"
+            or lowered.startswith(f"{prefix} removechannel ")
         ):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(
-                    message,
-                    "Run this command inside your server.",
-                )
+                await safe_reply(message, "Run this command inside your server.")
                 return
 
             if not is_admin(message.author, message.guild):
@@ -422,27 +364,18 @@ async def on_message(message):
                 )
                 return
 
-            await handle_removechannel(
-                message,
-                is_admin,
-            )
+            await handle_removechannel(message, is_admin)
             return
 
         # ------------------------------------------
         # CHAT MODE
         # ------------------------------------------
 
-        if lowered in (
-            f"{PREFIX} chat",
-            f"{PREFIX} longchat",
-        ):
+        if lowered in (f"{prefix} chat", f"{prefix} longchat"):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(
-                    message,
-                    "Run this command inside your server.",
-                )
+                await safe_reply(message, "Run this command inside your server.")
                 return
 
             if not is_admin(message.author, message.guild):
@@ -452,19 +385,10 @@ async def on_message(message):
                 )
                 return
 
-            new_mode = (
-                "longchat"
-                if lowered == f"{PREFIX} longchat"
-                else "chat"
-            )
-
+            new_mode = "longchat" if lowered == f"{prefix} longchat" else "chat"
             set_chat_mode(message.guild.id, new_mode)
 
-            label = (
-                "Detailed Chat"
-                if new_mode == "longchat"
-                else "Quick Chat"
-            )
+            label = "Detailed Chat" if new_mode == "longchat" else "Quick Chat"
 
             await safe_reply(
                 message,
@@ -472,7 +396,65 @@ async def on_message(message):
             )
             return
 
-        # Ignore unknown commands.
+        # ------------------------------------------
+        # PRODUCT COMMAND ROUTING
+        # ------------------------------------------
+
+        parts = content.split(maxsplit=2)
+
+        if len(parts) >= 2 and parts[0].lower() == prefix:
+            subcommand = parts[1].lower()
+            question = parts[2] if len(parts) == 3 else ""
+
+            # Developer-only commands belong in a separate router.
+            # This allowlist check is available for that router.
+            # Do not grant developer privileges based on server admin status.
+
+            # CODE PRO
+            if subcommand == "codepro":
+                COMMANDS_USED += 1
+
+                handled = await handle_code_pro(message, question)
+
+                if not handled:
+                    await safe_reply(
+                        message,
+                        f"Use `{PREFIX} code` to open the coding workspace "
+                        "and learn about Code Free and Code Pro.",
+                    )
+                return
+
+            # PRODUCT LIST
+            if subcommand == "products":
+                COMMANDS_USED += 1
+                await handle_products(message)
+                return
+
+            # EXISTING PRODUCT HANDLERS
+            if subcommand in PRODUCTS:
+                COMMANDS_USED += 1
+
+                if question:
+                    if subcommand == "research":
+                        await handle_ask_research(message, question)
+                    else:
+                        await handle_ask_product(message, subcommand, question)
+                else:
+                    await handle_product_command(message, subcommand)
+                return
+
+            # GRANT PRO
+            if subcommand == "grantpro":
+                COMMANDS_USED += 1
+
+                # Keep the existing product module's authorization logic.
+                await handle_grant_pro(message, parts)
+                return
+
+        # ------------------------------------------
+        # IGNORE UNKNOWN COMMANDS
+        # ------------------------------------------
+
         if is_command(content):
             return
 
@@ -492,12 +474,12 @@ async def on_message(message):
             return
 
         print(
-            f"[CHAT] Message received in configured channel "
-            f"{message.channel.id} (server {guild_id})"
+            f"[CHAT] Received message in configured channel "
+            f"{message.channel.id}; guild_id={guild_id}; user_id={user_id}"
         )
 
         # ------------------------------------------
-        # CODING ROUTER
+        # CODING REQUEST ROUTER
         # ------------------------------------------
 
         if looks_like_coding_request(content):
@@ -505,7 +487,7 @@ async def on_message(message):
             return
 
         # ------------------------------------------
-        # MEMORY AND AI
+        # USER MEMORY AND PREFERENCES
         # ------------------------------------------
 
         memory = get_user_memory(guild_id, user_id)
@@ -526,40 +508,35 @@ async def on_message(message):
 
         lower_content = content.lower()
 
-        if (
-            "reply in hindi" in lower_content
-            or "speak hindi" in lower_content
-            or "hindi mein reply" in lower_content
-            or "hindi me reply" in lower_content
-        ):
-            set_preference(
-                guild_id,
-                user_id,
-                "language",
-                "Hindi",
+        if any(
+            phrase in lower_content
+            for phrase in (
+                "reply in hindi",
+                "speak hindi",
+                "hindi mein reply",
+                "hindi me reply",
             )
+        ):
+            set_preference(guild_id, user_id, "language", "Hindi")
             preferences["language"] = "Hindi"
 
-        elif (
-            "reply in english" in lower_content
-            or "speak english" in lower_content
-        ):
-            set_preference(
-                guild_id,
-                user_id,
-                "language",
-                "English",
+        elif any(
+            phrase in lower_content
+            for phrase in (
+                "reply in english",
+                "speak english",
             )
+        ):
+            set_preference(guild_id, user_id, "language", "English")
             preferences["language"] = "English"
 
-        add_message(
-            guild_id,
-            user_id,
-            "user",
-            content,
-        )
+        add_message(guild_id, user_id, "user", content)
 
         mode = get_chat_mode(guild_id)
+
+        # ------------------------------------------
+        # AI REQUEST
+        # ------------------------------------------
 
         async with message.channel.typing():
             reply = await ask_veyra(
@@ -571,39 +548,23 @@ async def on_message(message):
             )
 
         if not reply:
-            reply = (
-                "I couldn't generate a response just now. "
-                "Please try again."
-            )
+            reply = "I couldn't generate a response just now. Please try again."
 
-        reply = str(reply)
-
-        add_message(
-            guild_id,
-            user_id,
-            "assistant",
-            reply,
-        )
-
-        if len(reply) <= 1900:
-            await message.reply(
-                reply,
-                mention_author=False,
-            )
-        else:
-            for start in range(0, len(reply), 1900):
-                await message.channel.send(
-                    reply[start:start + 1900]
-                )
+        add_message(guild_id, user_id, "assistant", str(reply))
+        await send_long_reply(message, reply)
 
     except Exception as error:
-        print(f"[MESSAGE ERROR] {type(error).__name__}: {error}")
+        print(
+            f"[MESSAGE ERROR] "
+            f"type={type(error).__name__}; "
+            f"user_id={message.author.id}; "
+            f"guild_id={message.guild.id if message.guild else 0}"
+        )
         traceback.print_exc()
 
         await safe_reply(
             message,
-            "I couldn't process that message right now. "
-            "Please try again later.",
+            "I couldn't process that message right now. Please try again later.",
         )
 
 
