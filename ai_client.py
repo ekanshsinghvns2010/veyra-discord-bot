@@ -195,6 +195,8 @@ async def ask_veyra(
         "temperature": TEMPERATURE,
     }
 
+    
+
     if web_search:
         request_options["tools"] = [
             {
@@ -203,10 +205,18 @@ async def ask_veyra(
                     "engine": "auto",
                     "max_results": 5,
                     "max_uses": 3,
-                    "search_context_size": "high",
+                    "search_context_size": "medium",
                 },
             }
         ]
+
+        # Put the research requirement in the system instructions.
+        messages[0]["content"] += (
+            "\n\nFor this request, use the available live web-search "
+            "tool before producing the research report. Search for "
+            "reliable sources and include their actual URLs as "
+            "clickable Markdown links. Never fabricate citations."
+        )
 
     response = await client.chat.completions.create(
         **request_options
@@ -226,6 +236,8 @@ async def ask_veyra(
         )
 
     return answer
+
+  
 
 
 async def summarize_memory(previous_summary, older_messages):
