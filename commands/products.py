@@ -1,7 +1,7 @@
-
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 import discord
@@ -96,12 +96,13 @@ def get_tier(user_id, product_id):
     data = load_access()
     user = data.get(str(user_id), {})
     tier = user.get(product_id, "free")
-
-    # Never accept arbitrary values as Pro.
     return "pro" if tier == "pro" else "free"
 
 
 def set_tier(user_id, product_id, tier):
+    if product_id not in PRODUCTS:
+        raise ValueError("Unknown product.")
+
     if tier not in {"free", "pro"}:
         raise ValueError("Tier must be free or pro.")
 
@@ -145,9 +146,7 @@ def product_embed(product_id, user_id, server_name):
             inline=False,
         )
 
-    embed.set_footer(
-        text="VEYRA AI • BY VOLBASTY STUDIOS"
-    )
+    embed.set_footer(text="VEYRA AI • BY VOLBASTY STUDIOS")
     return embed
 
 
@@ -205,13 +204,11 @@ class ProductView(discord.ui.View):
 
 async def activate_product(message, product_id):
     if message.guild is None:
-        await message.reply("Activate products inside a Discord server.")
+        await message.reply(
+            "Activate products inside a Discord server.",
+            mention_author=False,
+        )
         return
-
-    product = PRODUCTS[product_id]
-
-    # Check access before displaying the final workspace.
-    tier = get_tier(message.author.id, product_id)
 
     loading = discord.Embed(
         title="❄️ VEYRA INTELLIGENCE",
@@ -233,7 +230,6 @@ async def activate_product(message, product_id):
         mention_author=False,
     )
 
-    # Intentional UI delay, not a claim of actual background processing.
     await asyncio.sleep(4.5)
 
     view = ProductView(
@@ -263,8 +259,10 @@ async def handle_products(message):
         tier = get_tier(message.author.id, key)
         embed.add_field(
             name=f"{product['emoji']} {product['name']}",
-            value=f"Account tier: **{tier.upper()}**\n"
-                  f"Activate with `!veyra {key}`",
+            value=(
+                f"Account tier: **{tier.upper()}**\n"
+                f"Activate with `!veyra {key}`"
+            ),
             inline=False,
         )
 
@@ -280,35 +278,68 @@ async def handle_product_command(message, product_id):
 
 
 # Owner-only manual entitlement grant.
-# Configure VEYRA_OWNER_ID in your hosting environment.
+# Configure VEYRA_OWNER_ID in the hosting environment.
 async def handle_grant_pro(message, args):
     owner_id = os.getenv("VEYRA_OWNER_ID", "").strip()
 
     if not owner_id or str(message.author.id) != owner_id:
-        await message.reply("🔒 Only the bot owner can grant Pro access.")
-        return
-
-    if len(args) != 3:
         await message.reply(
-            "Usage: `!veyra grantpro @user code|study|research`"
+            "🔒 Only the configured bot owner can grant Pro access.",
+            mention_author=False,
         )
         return
+
+    # Supports both:
+    # ["!veyra", "grantpro", "<@123>", "research"]
+    # ["!veyra", "grantpro", "research"] with a real Discord mention
+    # in the message content.
+    mention_match = re.search(r"<@!?(\d+)>", message.content)
 
     target = message.mentions[0] if message.mentions else None
-    product_id = args[2].lower()
 
-    if target is None or product_id not in PRODUCTS:
+    if target is None and mention_match:
+        target_id = int(mention_match.group(1))
+
+        if message.guild is not None:
+            target = message.guild.get_member(target_id)
+
+    product_id = None
+
+    for item in args:
+        candidate = item.lower().strip()
+
+        if candidate in PRODUCTS:
+            product_id = candidate
+            break
+
+    if target is None or product_id is None:
         await message.reply(
-            "Mention a valid user and choose `code`, `study`, or `research`."
+            "Mention a valid server member and choose a product.\n"
+            "Usage: `!veyra grantpro @user research`\n"
+            "Available products: `code`, `study`, `research`",
+            mention_author=False,
         )
         return
 
-    set_tier(target.id, product_id, "pro")
+    try:
+        set_tier(target.id, product_id, "pro")
+    except (OSError, ValueError) as error:
+        print(
+            f"[GRANT PRO ERROR] {type(error).__name__}: {error}",
+            flush=True,
+        )
+        await message.reply(
+            "❌ I couldn't save the Pro entitlement. Check the bot logs.",
+            mention_author=False,
+        )
+        return
 
     await message.reply(
         f"✅ Granted **{PRODUCTS[product_id]['pro_name']}** to "
         f"{target.mention}.\n"
-        "This records a manual owner grant; it does not process a payment."
+        f"Product: **{PRODUCTS[product_id]['name']}**\n"
+        "This is a manual owner grant; no payment was processed.",
+        mention_author=False,
     )
 
 
@@ -319,7 +350,8 @@ async def handle_ask_product(message, product_id, prompt):
     if not prompt.strip():
         await message.reply(
             f"Add your question after the command, for example:\n"
-            f"`!veyra {product_id} Explain this topic`"
+            f"`!veyra {product_id} Explain this topic`",
+            mention_author=False,
         )
         return
 
@@ -333,8 +365,8 @@ async def handle_ask_product(message, product_id, prompt):
             + (
                 "For this Pro account, provide deeper reviews and "
                 "multi-file implementation plans when useful."
-                if tier == "pro" else
-                "For Free, focus on concise explanations and small examples."
+                if tier == "pro"
+                else "For Free, focus on concise explanations and small examples."
             )
         ),
         "study": (
@@ -342,8 +374,8 @@ async def handle_ask_product(message, product_id, prompt):
             "use examples, and create practice questions when requested. "
             + (
                 "For Pro, provide detailed notes and structured revision."
-                if tier == "pro" else
-                "For Free, keep notes and explanations concise."
+                if tier == "pro"
+                else "For Free, keep notes and explanations concise."
             )
         ),
         "research": (
@@ -353,9 +385,9 @@ async def handle_ask_product(message, product_id, prompt):
             "actually ran. "
             + (
                 "For Pro, prepare structured research reports when "
-                "appropriate, but use live search only if configured."
-                if tier == "pro" else
-                "For Free, give a concise answer and state when live "
+                "appropriate, and use live search when configured."
+                if tier == "pro"
+                else "For Free, give a concise answer and state when live "
                 "verification is needed."
             )
         ),
@@ -373,22 +405,35 @@ async def handle_ask_product(message, product_id, prompt):
 
     try:
         answer = await ask_veyra(
-    prompt=f"{system_prompt}\n\nUser request:\n{prompt}",
-    mode="deep" if tier == "pro" else "chat",
-    web_search=(product_id == "research" and tier == "pro"),
-)
+            prompt=f"{system_prompt}\n\nUser request:\n{prompt}",
+            mode="deep" if tier == "pro" else "chat",
+            web_search=(product_id == "research" and tier == "pro"),
+        )
 
-        answer = str(answer or "I couldn't generate a response.")
-        result = discord.Embed(
+        answer = str(answer or "I couldn't generate a response.").strip()
+
+        if not answer:
+            answer = "I couldn't generate a response. Please try again."
+
+        # Discord embed descriptions are limited to 4096 characters.
+        chunks = [
+            answer[i:i + 3900]
+            for i in range(0, len(answer), 3900)
+        ]
+
+        first = discord.Embed(
             title=f"{product['emoji']} {product['name']}",
-            description=answer[:4000],
+            description=chunks[0],
             color=ICE_BLUE,
         )
-        result.set_footer(
+        first.set_footer(
             text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
         )
 
-        await reply_message.edit(embed=result)
+        await reply_message.edit(embed=first)
+
+        for chunk in chunks[1:]:
+            await message.channel.send(chunk)
 
     except Exception as error:
         print(
@@ -399,10 +444,10 @@ async def handle_ask_product(message, product_id, prompt):
 
         await reply_message.edit(
             embed=discord.Embed(
-                title="⚠️ Veyra Debug",
+                title="⚠️ Product request failed",
                 description=(
-                    f"Error type: `{type(error).__name__}`\n"
-                    f"Details: `{str(error)[:900]}`"
+                    "Veyra couldn't complete this request. "
+                    "Please try again later."
                 ),
                 color=discord.Color.orange(),
             )
