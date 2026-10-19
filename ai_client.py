@@ -49,8 +49,10 @@ DEEP_PROMPT = """
 Give a detailed, well-organized answer with useful explanations
 and examples when appropriate. Follow the user's saved language
 preference when one is provided.
+When web search is available, use it for current or research-based
+questions. Never invent sources, URLs, or search findings.
+Clearly distinguish verified facts from uncertainty.
 """
-
 
 def _memory_context(summary, preferences):
     sections = []
@@ -83,12 +85,56 @@ def _memory_context(summary, preferences):
     )
 
 
+def _source_links(message):
+    annotations = getattr(message, "annotations", None) or []
+    sources = []
+    seen_urls = set()
+
+    for annotation in annotations:
+        if isinstance(annotation, dict):
+            kind = annotation.get("type")
+            citation = annotation.get("url_citation", {})
+        else:
+            kind = getattr(annotation, "type", None)
+            citation = getattr(annotation, "url_citation", None)
+
+        if kind != "url_citation" or not citation:
+            continue
+
+        if isinstance(citation, dict):
+            url = citation.get("url", "")
+            title = citation.get("title", "")
+        else:
+            url = getattr(citation, "url", "")
+            title = getattr(citation, "title", "")
+
+        if (
+            not isinstance(url, str)
+            or not url.startswith(("https://", "http://"))
+            or url in seen_urls
+        ):
+            continue
+
+        seen_urls.add(url)
+        label = title.strip() if isinstance(title, str) else ""
+        if not label:
+            label = url.split("/")[2]
+
+        sources.append(f"- [{label}]({url})")
+
+    if not sources:
+        return ""
+
+    return "\n\n**Sources**\n" + "\n".join(sources[:10])
+
+
 async def ask_veyra(
     prompt,
     mode="chat",
     memory_summary="",
     preferences=None,
     history=None,
+    web_search=False,
 ):
     is_detailed = mode in {"deep", "longchat"}
 
@@ -113,7 +159,6 @@ async def ask_veyra(
         }
     ]
 
-    # Add valid conversation history.
     if isinstance(history, list):
         for item in history:
             if not isinstance(item, dict):
@@ -133,8 +178,6 @@ async def ask_veyra(
                 "content": content,
             })
 
-    # Critical fix: always include the newest user message.
-    # Avoid adding it twice if it is already the last history item.
     if not (
         len(messages) > 1
         and messages[-1]["role"] == "user"
@@ -145,15 +188,36 @@ async def ask_veyra(
             "content": prompt,
         })
 
+    request_options = {
+        "model": DEFAULT_MODEL,
+        "messages": messages,
+        "max_tokens": token_limit,
+        "temperature": TEMPERATURE,
+    }
+
+    if web_search:
+        request_options["tools"] = [
+            {
+                "type": "openrouter:web_search",
+                "parameters": {
+                    "engine": "auto",
+                    "max_results": 5,
+                    "max_uses": 3,
+                    "search_context_size": "high",
+                },
+            }
+        ]
+
     response = await client.chat.completions.create(
-        model=DEFAULT_MODEL,
-        messages=messages,
-        max_tokens=token_limit,
-        temperature=TEMPERATURE,
+        **request_options
     )
 
-    answer = response.choices[0].message.content or ""
+    message = response.choices[0].message
+    answer = message.content or ""
     finish_reason = response.choices[0].finish_reason
+
+    if web_search:
+        answer += _source_links(message)
 
     if finish_reason == "length":
         answer += (
