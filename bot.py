@@ -37,6 +37,7 @@ from commands.removechannel import handle_removechannel
 from commands.memory import handle_memory
 
 from security.permissions import is_developer
+from security.dev_commands import handle_dev_command
 
 try:
     from commands.shop import handle_shop
@@ -64,7 +65,8 @@ START_TIME = time.monotonic()
 # ==================================================
 
 def is_admin(member, guild=None):
-    """Server owner, Administrator, or Manage Server."""
+    """Check server owner, Administrator, or Manage Server."""
+
     if not isinstance(member, discord.Member):
         return False
 
@@ -79,7 +81,7 @@ def is_admin(member, guild=None):
 
 
 def is_server_manager(member, guild=None):
-    """Compatibility wrapper for existing admin command handlers."""
+    """Compatibility wrapper for existing command handlers."""
     return is_admin(member, guild)
 
 
@@ -96,7 +98,8 @@ def is_command(content):
 
 
 async def safe_reply(message, content=None, **kwargs):
-    """Send a reply without allowing reply failures to crash the bot."""
+    """Reply safely without crashing the message handler."""
+
     try:
         await message.reply(
             content or "",
@@ -104,7 +107,7 @@ async def safe_reply(message, content=None, **kwargs):
             **kwargs,
         )
     except Exception as error:
-        print(f"[REPLY ERROR] {type(error).__name__}")
+        print(f"[REPLY ERROR] {type(error).__name__}: {error}")
 
 
 def looks_like_coding_request(content):
@@ -167,23 +170,29 @@ async def send_coding_upgrade_embed(message):
         inline=False,
     )
 
-    embed.set_footer(text="VEYRA AI • Powered by Volbasty Studios")
+    embed.set_footer(
+        text="VEYRA AI • Powered by Volbasty Studios"
+    )
+
     await message.reply(embed=embed, mention_author=False)
 
 
 async def send_long_reply(message, text):
-    """Split long AI replies safely under Discord's message limit."""
+    """Split normal AI replies under Discord's message limit."""
+
     text = str(text or "").strip()
 
     if not text:
         text = "I couldn't generate a response just now. Please try again."
 
-    # Discord message content is limited to 2000 characters.
     for start in range(0, len(text), 1900):
         chunk = text[start:start + 1900]
 
         if start == 0:
-            await message.reply(chunk, mention_author=False)
+            await message.reply(
+                chunk,
+                mention_author=False,
+            )
         else:
             await message.channel.send(chunk)
 
@@ -201,7 +210,7 @@ async def on_ready():
     print("[READY] Memory system: enabled")
     print("[READY] Channel configuration: file-backed")
     print("[READY] Logging command: loaded")
-    print("[READY] Developer allowlist: loaded")
+    print("[READY] Developer command router: loaded")
     print("[READY] Waiting for messages...")
     print("=" * 48)
 
@@ -213,9 +222,13 @@ async def on_ready():
 @client.event
 async def on_guild_remove(guild):
     """Clean up saved chat-channel settings when leaving a server."""
+
     try:
         remove_guild_channels(guild.id)
-        print(f"[GUILD] Removed chat-channel settings for server {guild.id}")
+        print(
+            f"[GUILD] Removed chat-channel settings "
+            f"for server {guild.id}"
+        )
     except Exception:
         print("[GUILD ERROR] Could not clean up server settings.")
         traceback.print_exc()
@@ -242,11 +255,29 @@ async def on_message(message):
 
     try:
         # ------------------------------------------
+        # DEVELOPER-ONLY COMMAND ROUTER
+        # ------------------------------------------
+        # This router must enforce the developer allowlist
+        # internally. Server-admin status is NOT developer access.
+
+        if is_command(content):
+            handled = await handle_dev_command(
+                message,
+                client,
+                PREFIX,
+            )
+
+            if handled:
+                COMMANDS_USED += 1
+                return
+
+        # ------------------------------------------
         # PING
         # ------------------------------------------
 
         if lowered == f"{prefix} ping":
             COMMANDS_USED += 1
+
             await handle_ping(
                 message,
                 client,
@@ -259,7 +290,10 @@ async def on_message(message):
         # HELP
         # ------------------------------------------
 
-        if lowered in (f"{prefix} help", f"{prefix} guide"):
+        if lowered in (
+            f"{prefix} help",
+            f"{prefix} guide",
+        ):
             COMMANDS_USED += 1
             await handle_help(message, PREFIX)
             return
@@ -291,7 +325,10 @@ async def on_message(message):
 
             guild_id = message.guild.id if message.guild else 0
 
-            clear_user_memory(guild_id, message.author.id)
+            clear_user_memory(
+                guild_id,
+                message.author.id,
+            )
 
             await safe_reply(
                 message,
@@ -328,7 +365,10 @@ async def on_message(message):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(message, "Run this command inside your server.")
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
                 return
 
             if not is_admin(message.author, message.guild):
@@ -339,7 +379,11 @@ async def on_message(message):
                 )
                 return
 
-            await handle_setchannel(message, client, is_admin)
+            await handle_setchannel(
+                message,
+                client,
+                is_admin,
+            )
             return
 
         # ------------------------------------------
@@ -353,7 +397,10 @@ async def on_message(message):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(message, "Run this command inside your server.")
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
                 return
 
             if not is_admin(message.author, message.guild):
@@ -364,18 +411,27 @@ async def on_message(message):
                 )
                 return
 
-            await handle_removechannel(message, is_admin)
+            await handle_removechannel(
+                message,
+                is_admin,
+            )
             return
 
         # ------------------------------------------
         # CHAT MODE
         # ------------------------------------------
 
-        if lowered in (f"{prefix} chat", f"{prefix} longchat"):
+        if lowered in (
+            f"{prefix} chat",
+            f"{prefix} longchat",
+        ):
             COMMANDS_USED += 1
 
             if message.guild is None:
-                await safe_reply(message, "Run this command inside your server.")
+                await safe_reply(
+                    message,
+                    "Run this command inside your server.",
+                )
                 return
 
             if not is_admin(message.author, message.guild):
@@ -385,10 +441,19 @@ async def on_message(message):
                 )
                 return
 
-            new_mode = "longchat" if lowered == f"{prefix} longchat" else "chat"
+            new_mode = (
+                "longchat"
+                if lowered == f"{prefix} longchat"
+                else "chat"
+            )
+
             set_chat_mode(message.guild.id, new_mode)
 
-            label = "Detailed Chat" if new_mode == "longchat" else "Quick Chat"
+            label = (
+                "Detailed Chat"
+                if new_mode == "longchat"
+                else "Quick Chat"
+            )
 
             await safe_reply(
                 message,
@@ -406,48 +471,62 @@ async def on_message(message):
             subcommand = parts[1].lower()
             question = parts[2] if len(parts) == 3 else ""
 
-            # Developer-only commands belong in a separate router.
-            # This allowlist check is available for that router.
-            # Do not grant developer privileges based on server admin status.
-
             # CODE PRO
+
             if subcommand == "codepro":
                 COMMANDS_USED += 1
 
-                handled = await handle_code_pro(message, question)
+                handled = await handle_code_pro(
+                    message,
+                    question,
+                )
 
                 if not handled:
                     await safe_reply(
                         message,
-                        f"Use `{PREFIX} code` to open the coding workspace "
-                        "and learn about Code Free and Code Pro.",
+                        f"Use `{PREFIX} code` to open the coding "
+                        "workspace and learn about Code Free and Code Pro.",
                     )
+
                 return
 
             # PRODUCT LIST
+
             if subcommand == "products":
                 COMMANDS_USED += 1
                 await handle_products(message)
                 return
 
             # EXISTING PRODUCT HANDLERS
+
             if subcommand in PRODUCTS:
                 COMMANDS_USED += 1
 
                 if question:
                     if subcommand == "research":
-                        await handle_ask_research(message, question)
+                        await handle_ask_research(
+                            message,
+                            question,
+                        )
                     else:
-                        await handle_ask_product(message, subcommand, question)
+                        await handle_ask_product(
+                            message,
+                            subcommand,
+                            question,
+                        )
                 else:
-                    await handle_product_command(message, subcommand)
+                    await handle_product_command(
+                        message,
+                        subcommand,
+                    )
+
                 return
 
             # GRANT PRO
+            # Keep authorization inside the products module.
+
             if subcommand == "grantpro":
                 COMMANDS_USED += 1
-
-                # Keep the existing product module's authorization logic.
                 await handle_grant_pro(message, parts)
                 return
 
@@ -475,7 +554,8 @@ async def on_message(message):
 
         print(
             f"[CHAT] Received message in configured channel "
-            f"{message.channel.id}; guild_id={guild_id}; user_id={user_id}"
+            f"{message.channel.id}; guild_id={guild_id}; "
+            f"user_id={user_id}"
         )
 
         # ------------------------------------------
@@ -517,7 +597,12 @@ async def on_message(message):
                 "hindi me reply",
             )
         ):
-            set_preference(guild_id, user_id, "language", "Hindi")
+            set_preference(
+                guild_id,
+                user_id,
+                "language",
+                "Hindi",
+            )
             preferences["language"] = "Hindi"
 
         elif any(
@@ -527,16 +612,26 @@ async def on_message(message):
                 "speak english",
             )
         ):
-            set_preference(guild_id, user_id, "language", "English")
+            set_preference(
+                guild_id,
+                user_id,
+                "language",
+                "English",
+            )
             preferences["language"] = "English"
 
-        add_message(guild_id, user_id, "user", content)
-
-        mode = get_chat_mode(guild_id)
+        add_message(
+            guild_id,
+            user_id,
+            "user",
+            content,
+        )
 
         # ------------------------------------------
         # AI REQUEST
         # ------------------------------------------
+
+        mode = get_chat_mode(guild_id)
 
         async with message.channel.typing():
             reply = await ask_veyra(
@@ -548,15 +643,23 @@ async def on_message(message):
             )
 
         if not reply:
-            reply = "I couldn't generate a response just now. Please try again."
+            reply = (
+                "I couldn't generate a response just now. "
+                "Please try again."
+            )
 
-        add_message(guild_id, user_id, "assistant", str(reply))
+        add_message(
+            guild_id,
+            user_id,
+            "assistant",
+            str(reply),
+        )
+
         await send_long_reply(message, reply)
 
     except Exception as error:
         print(
-            f"[MESSAGE ERROR] "
-            f"type={type(error).__name__}; "
+            f"[MESSAGE ERROR] type={type(error).__name__}; "
             f"user_id={message.author.id}; "
             f"guild_id={message.guild.id if message.guild else 0}"
         )
@@ -564,7 +667,8 @@ async def on_message(message):
 
         await safe_reply(
             message,
-            "I couldn't process that message right now. Please try again later.",
+            "I couldn't process that message right now. "
+            "Please try again later.",
         )
 
 
