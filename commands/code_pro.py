@@ -1,8 +1,10 @@
 
 import asyncio
+import io
 import json
 import re
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 import discord
 
@@ -18,12 +20,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 PROJECTS_FILE = DATA_DIR / "code_projects.json"
 
-# Discord embed descriptions have a 4096-character limit.
-# Keep a margin for formatting and platform differences.
 MAX_EMBED_CHARS = 3500
+MAX_ATTACHMENT_BYTES = 7 * 1024 * 1024
+MAX_PROJECT_BYTES = 20 * 1024 * 1024
+MAX_FILES = 100
 
-# Prevent an unexpectedly huge response from overwhelming Discord.
-MAX_OUTPUT_CHARS = 100_000
+# Discord attachment limits depend on the server/account.
+# Stay conservative and handle upload failures gracefully.
 
 
 # ==================================================
@@ -68,7 +71,7 @@ def get_project(message):
     return key, projects, project
 
 
-def update_project(message, prompt, response):
+def update_project(message, prompt, response, files=None):
     key, projects, project = get_project(message)
 
     if not project:
@@ -80,21 +83,225 @@ def update_project(message, prompt, response):
             "notes": "",
         }
 
-    # Preserve the original goal and existing file list.
     project["last_request"] = prompt[:500]
     project["notes"] = response[:2000]
     project["progress"] = "Latest response generated"
+
+    if files:
+        project["files"] = list(files.keys())[:MAX_FILES]
 
     projects[key] = project
     save_projects(projects)
 
 
 # ==================================================
-# CODE-AWARE OUTPUT SPLITTING
+# RESPONSE PARSING
 # ==================================================
 
-def _split_plain_text(text, limit):
-    """Split ordinary text while preferring newline boundaries."""
+_FILE_MARKER = re.compile(
+    r"(?m)^[ \t]*FILE:[ \t]*(.+?)[ \t]*$"
+)
+
+_FENCE_LINE = re.compile(
+    r"^[ \t]{0,3}(`{3,}|~{3,})([^\r\n]*)$"
+)
+
+
+def _safe_filename(name):
+    """Reject absolute paths and traversal outside the project."""
+
+    name = name.strip().replace("\\", "/")
+    path = PurePosixPath(name)
+
+    if (
+        not name
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or ":" in path.parts[0]
+    ):
+        return None
+
+    cleaned = str(path)
+
+    if cleaned in {"", "."}:
+        return None
+
+    return cleaned
+
+
+def _remove_outer_fence(content):
+    """
+    Remove one outer Markdown fence when it wraps an entire file.
+
+    The opening and closing fences must match. Inner Markdown fences
+    are retained when the outer fence uses a longer delimiter.
+    """
+
+    lines = content.splitlines(keepends=True)
+
+    if len(lines) < 2:
+        return content.strip("\r\n")
+
+    opening = _FENCE_LINE.match(lines[0].rstrip("\r\n"))
+
+    if not opening:
+        return content.strip("\r\n")
+
+    marker = opening.group(1)
+    marker_char = marker[0]
+
+    closing_index = None
+
+    for index in range(len(lines) - 1, 0, -1):
+        candidate = _FENCE_LINE.match(
+            lines[index].rstrip("\r\n")
+        )
+
+        if not candidate:
+            continue
+
+        closing_marker = candidate.group(1)
+
+        if (
+            closing_marker[0] == marker_char
+            and len(closing_marker) >= len(marker)
+            and not candidate.group(2).strip()
+        ):
+            closing_index = index
+            break
+
+    if closing_index is None:
+        return content.strip("\r\n")
+
+    # Only unwrap if the fence encloses the entire section.
+    if any(line.strip() for line in lines[1:closing_index]):
+        return "".join(lines[1:closing_index]).strip("\r\n")
+
+    return ""
+
+
+def extract_files(response):
+    """
+    Extract files labelled as:
+
+        FILE: src/main.py
+        ```python
+        print("hello")
+        ```
+
+    Returns a dictionary of path -> complete file content.
+    If no valid file markers are found, returns an empty dictionary.
+    """
+
+    matches = list(_FILE_MARKER.finditer(response))
+
+    if not matches:
+        return {}
+
+    files = {}
+
+    for index, match in enumerate(matches):
+        raw_name = match.group(1).strip()
+        name = _safe_filename(raw_name)
+
+        if not name:
+            continue
+
+        section_start = match.end()
+        section_end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(response)
+        )
+
+        section = response[section_start:section_end].strip()
+
+        # Prefer the first fenced block in the section. For files such
+        # as README.md, the model should use an outer fence longer than
+        # any embedded Markdown fence.
+        lines = section.splitlines(keepends=True)
+        opening_index = None
+        opening_marker = None
+
+        for line_index, line in enumerate(lines):
+            fence = _FENCE_LINE.match(line.rstrip("\r\n"))
+
+            if fence:
+                opening_index = line_index
+                opening_marker = fence.group(1)
+                break
+
+        if opening_index is not None:
+            marker_char = opening_marker[0]
+            closing_index = None
+
+            for line_index in range(
+                opening_index + 1,
+                len(lines),
+            ):
+                fence = _FENCE_LINE.match(
+                    lines[line_index].rstrip("\r\n")
+                )
+
+                if not fence:
+                    continue
+
+                candidate = fence.group(1)
+
+                if (
+                    candidate[0] == marker_char
+                    and len(candidate) >= len(opening_marker)
+                    and not fence.group(2).strip()
+                ):
+                    closing_index = line_index
+
+            if closing_index is not None:
+                content = "".join(
+                    lines[opening_index + 1:closing_index]
+                ).rstrip("\r\n")
+            else:
+                # Preserve the content if the model forgot the closing
+                # fence rather than discarding the end of the file.
+                content = "".join(
+                    lines[opening_index + 1:]
+                ).rstrip("\r\n")
+        else:
+            content = section.strip("\r\n")
+
+        if name in files:
+            # Don't silently overwrite a duplicate file in one response.
+            suffix = 2
+            original = name
+
+            while name in files:
+                path = PurePosixPath(original)
+                name = str(
+                    path.with_name(
+                        f"{path.stem}_{suffix}{path.suffix}"
+                    )
+                )
+                suffix += 1
+
+        files[name] = content
+
+        if len(files) >= MAX_FILES:
+            break
+
+    return files
+
+
+# ==================================================
+# DISPLAY HELPERS
+# ==================================================
+
+def split_output(text, limit=MAX_EMBED_CHARS):
+    """Split display text without dropping characters."""
+
+    text = text or ""
+
+    if not text:
+        return ["No output was generated. Please try again."]
+
     chunks = []
 
     while text:
@@ -104,7 +311,6 @@ def _split_plain_text(text, limit):
 
         cut = text.rfind("\n", 0, limit)
 
-        # Avoid producing tiny chunks when no useful newline exists.
         if cut < limit // 2:
             cut = limit
 
@@ -114,182 +320,170 @@ def _split_plain_text(text, limit):
     return chunks
 
 
-def split_output(text, limit=MAX_EMBED_CHARS):
-    """
-    Split generated output into Discord-safe chunks.
+async def send_embeds(message, text, title="Veyra Code Pro"):
+    """Send ordinary status or project-tree text as embeds."""
 
-    Fenced code blocks are kept syntactically valid across chunks:
-    if a code block spans multiple chunks, the current chunk is closed
-    and the next chunk reopens the fence using the same language label.
-
-    The returned chunks can be placed in separate Discord embeds.
-    """
-
-    text = (text or "").strip()
-
-    if not text:
-        return ["No output was generated. Please try again."]
-
-    if len(text) > MAX_OUTPUT_CHARS:
-        text = (
-            text[:MAX_OUTPUT_CHARS]
-            + "\n\n[Output truncated: response exceeded the size limit.]"
-        )
-
-    # Track fenced blocks by their opening backticks and optional language.
-    fence_pattern = re.compile(
-        r"(?m)^ {0,3}(`{3,}|~{3,})([^\n]*)$"
-    )
-
-    chunks = []
-    current = ""
-    open_fence = None
-    position = 0
-
-    def append_chunk(value):
-        if value:
-            chunks.append(value)
-
-    def add_piece(piece):
-        nonlocal current
-
-        # When a fence is open, reserve space to close it.
-        closing = ""
-        if open_fence is not None:
-            closing = "\n" + open_fence["marker"]
-
-        available = limit - len(current) - len(closing)
-
-        if len(piece) <= available:
-            current += piece
-            return
-
-        # Flush the current chunk with a valid closing fence.
-        if current.strip():
-            append_chunk(current + closing)
-        current = ""
-
-        # Reopen the same code block in the next chunk.
-        if open_fence is not None:
-            current = (
-                open_fence["marker"]
-                + open_fence["language"]
-                + "\n"
-            )
-
-        # A single long line may exceed the remaining space.
-        # Split it into safe-sized pieces without dropping characters.
-        while piece:
-            closing = ""
-            if open_fence is not None:
-                closing = "\n" + open_fence["marker"]
-
-            available = limit - len(current) - len(closing)
-
-            if available <= 0:
-                append_chunk(current + closing)
-                current = ""
-
-                if open_fence is not None:
-                    current = (
-                        open_fence["marker"]
-                        + open_fence["language"]
-                        + "\n"
-                    )
-                continue
-
-            take = min(len(piece), available)
-            current += piece[:take]
-            piece = piece[take:]
-
-            if piece:
-                append_chunk(current + closing)
-                current = ""
-
-                if open_fence is not None:
-                    current = (
-                        open_fence["marker"]
-                        + open_fence["language"]
-                        + "\n"
-                    )
-
-    # Process the response line by line so fence boundaries are recognized.
-    lines = text.splitlines(keepends=True)
-
-    for line in lines:
-        match = fence_pattern.match(line.rstrip("\r\n"))
-
-        if match:
-            marker = match.group(1)
-            language = match.group(2).strip()
-
-            if open_fence is None:
-                open_fence = {
-                    "marker": marker,
-                    "language": language,
-                }
-                add_piece(line)
-            else:
-                # Only a matching fence type and sufficient length closes it.
-                same_type = marker[0] == open_fence["marker"][0]
-                long_enough = len(marker) >= len(
-                    open_fence["marker"]
-                )
-
-                if same_type and long_enough:
-                    add_piece(line)
-                    open_fence = None
-                else:
-                    add_piece(line)
-        else:
-            add_piece(line)
-
-    if current:
-        if open_fence is not None:
-            current += "\n" + open_fence["marker"]
-
-        append_chunk(current)
-
-    # Defensive fallback: no content should ever be silently discarded.
-    return chunks or [text[:limit]]
-
-
-# ==================================================
-# DISCORD EMBED OUTPUT
-# ==================================================
-
-async def send_output(message, response):
-    """Send every response part as an embed."""
-
-    chunks = split_output(response)
+    chunks = split_output(text)
     total = len(chunks)
 
     for index, chunk in enumerate(chunks, start=1):
         embed = discord.Embed(
-            title=f"Veyra Code Pro • Part {index}/{total}",
+            title=f"{title} • {index}/{total}",
             description=chunk,
             color=discord.Color.blurple(),
         )
 
         embed.set_footer(
-            text="Generated code • Review before running"
+            text="Generated by Veyra Code Pro • Review before running"
         )
 
-        try:
-            if index == 1:
-                await message.reply(
-                    embed=embed,
-                    mention_author=False,
-                )
-            else:
-                await message.channel.send(embed=embed)
-
-        except discord.HTTPException as exc:
-            print(
-                f"[CODE PRO SEND ERROR] Part {index}/{total}: "
-                f"{type(exc).__name__}: {exc}"
+        if index == 1:
+            await message.reply(
+                embed=embed,
+                mention_author=False,
             )
-            raise
+        else:
+            await message.channel.send(embed=embed)
+
+
+# ==================================================
+# FILE DELIVERY
+# ==================================================
+
+def build_zip(files):
+    """Build an in-memory ZIP containing the complete extracted files."""
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(
+        buffer,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+    buffer.seek(0)
+    return buffer
+
+
+async def send_file_attachments(message, files):
+    """
+    Send complete source files as attachments.
+
+    Small projects are sent as individual files. Larger projects are
+    packaged into a ZIP, avoiding embed splitting of source code.
+    """
+
+    if not files:
+        return False
+
+    total_bytes = sum(
+        len(content.encode("utf-8"))
+        for content in files.values()
+    )
+
+    if total_bytes > MAX_PROJECT_BYTES:
+        await message.channel.send(
+            "⚠️ The generated project is too large to attach in one "
+            "delivery. Reduce the requested project size and try again."
+        )
+        return False
+
+    if len(files) == 1:
+        name, content = next(iter(files.items()))
+        data = content.encode("utf-8")
+
+        if len(data) <= MAX_ATTACHMENT_BYTES:
+            attachment = discord.File(
+                io.BytesIO(data),
+                filename=PurePosixPath(name).name,
+            )
+
+            await message.channel.send(
+                content=f"📄 Complete file: `{name}`",
+                file=attachment,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return True
+
+    # ZIP delivery preserves directory structure and complete file data.
+    zip_buffer = build_zip(files)
+
+    if zip_buffer.getbuffer().nbytes > MAX_ATTACHMENT_BYTES:
+        await message.channel.send(
+            "⚠️ The project ZIP exceeds the configured attachment size. "
+            "Try requesting a smaller project."
+        )
+        return False
+
+    attachment = discord.File(
+        zip_buffer,
+        filename="veyra_code_project.zip",
+    )
+
+    await message.channel.send(
+        content=(
+            f"📦 Complete project attached "
+            f"({len(files)} files). Extract the ZIP to use the files."
+        ),
+        file=attachment,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+    return True
+
+
+async def send_output(message, response):
+    """
+    Deliver generated output.
+
+    Recognized file-labelled responses are sent as actual files.
+    The project tree is displayed in embeds. Unrecognized output is
+    preserved as text rather than guessed into files.
+    """
+
+    files = extract_files(response)
+
+    if files:
+        tree_match = re.search(
+            r"(?ms)^[ \t]*```(?:text|tree)?[ \t]*\r?\n"
+            r"(.*?)^[ \t]*```[ \t]*$",
+            response,
+        )
+
+        if tree_match:
+            tree = tree_match.group(1).strip()
+            if tree:
+                await send_embeds(
+                    message,
+                    tree,
+                    title="Project Structure",
+                )
+
+        delivered = await send_file_attachments(message, files)
+
+        if delivered:
+            return
+
+        # If attachments fail or exceed limits, provide a clear warning.
+        await send_embeds(
+            message,
+            (
+                "The generated files were recognized, but attachment "
+                "delivery did not complete. Please retry with a smaller "
+                "project. No claim is made that the files were delivered."
+            ),
+            title="Delivery Notice",
+        )
+        return
+
+    # No reliable file boundaries: preserve the model response as text.
+    await send_embeds(
+        message,
+        response,
+        title="Veyra Code Pro Output",
+    )
 
 
 # ==================================================
@@ -325,12 +519,11 @@ def build_system_prompt(project, explanation_requested):
 
     explanation_rule = (
         "The user explicitly requested an explanation. Explain "
-        "the relevant code clearly, then provide any requested files."
+        "the relevant code clearly, then provide the requested files."
         if explanation_requested
         else (
-            "CODE-ONLY OUTPUT: no greeting, conversation, introduction, "
-            "or explanation. Output the file tree followed by complete "
-            "files only."
+            "CODE-ONLY OUTPUT: no greeting, introduction, conversation, "
+            "or explanation. Output the project tree followed by files."
         )
     )
 
@@ -348,32 +541,37 @@ RESPONSE MODE
 {explanation_rule}
 
 STRICT OUTPUT RULES
-1. For multi-file tasks, start with a compact file tree.
-2. Output each file separately, labelled exactly:
+1. For multi-file projects, begin with a compact project tree.
+2. Label every file on its own line exactly as:
    FILE: path/to/file.ext
-3. Put each file's complete contents in a language-labelled Markdown
-   code fence.
-4. Never combine different files into one code block.
-5. Never replace required code with placeholders, ellipses, or
-   statements such as "rest of the code goes here".
-6. For a single-file task, output the file directly.
-7. For follow-up changes, output only changed files unless the user
-   requests the complete project.
-8. Ask one short question if a missing detail prevents implementation.
-9. Keep filenames and project decisions consistent with saved context.
-10. Never claim code was executed, tested, or deployed unless it was.
-11. Never claim to have changed the user's repository or device.
-12. Never execute generated code on the bot host.
-13. Never reveal API keys, passwords, or private credentials.
-14. Do not generate malware or harmful code.
-15. Keep every file complete; do not split a file into numbered
-    response parts yourself. The platform will handle output splitting.
+3. Put each file's complete contents in one Markdown code fence.
+4. Use an outer fence longer than any Markdown fence inside the file.
+   For example, use four backticks around a README containing triple
+   backticks. Do not alter the actual file content.
+5. Never split a file into numbered response parts.
+6. Never insert phrases like "Part 2 response" into a file.
+7. Never omit code, docstrings, imports, closing brackets, or file endings.
+8. Never replace required code with placeholders or ellipses.
+9. For follow-up changes, output changed files only unless asked for all.
+10. Keep paths relative to the project root.
+11. Do not repeat a FILE label for the same file.
+12. Never claim code was executed, tested, or deployed unless it was.
+13. Never claim to have modified the user's repository or device.
+14. Never execute generated code on the bot host.
+15. Never reveal API keys, passwords, or private credentials.
+16. Do not generate malware or harmful code.
+17. If you cannot fit the requested implementation into one response,
+    clearly say so instead of fabricating complete files.
 
 SUPPORTED PROJECTS
 Websites, Android apps, Discord bots, Python tools, robotics software,
 and space-technology software.
 """
 
+
+# ==================================================
+# MAIN HANDLER
+# ==================================================
 
 async def handle_code_pro(message, prompt):
     """
@@ -430,8 +628,15 @@ async def handle_code_pro(message, prompt):
             )
             return True
 
-        # Save project state independently of normal chat memory.
-        update_project(message, prompt, response)
+        files = extract_files(response)
+
+        # Persist project state independently of normal chat memory.
+        update_project(
+            message,
+            prompt,
+            response,
+            files=files or None,
+        )
 
         try:
             await status.delete()
@@ -441,12 +646,15 @@ async def handle_code_pro(message, prompt):
         await send_output(message, response)
 
     except asyncio.TimeoutError:
-        await status.edit(
-            content=(
-                "⏳ Code generation timed out. "
-                "Please try again with a smaller request."
+        try:
+            await status.edit(
+                content=(
+                    "⏳ Code generation timed out. "
+                    "Please try again with a smaller request."
+                )
             )
-        )
+        except discord.HTTPException:
+            pass
 
     except Exception as exc:
         print(
@@ -456,9 +664,10 @@ async def handle_code_pro(message, prompt):
         try:
             await status.edit(
                 content=(
-                    "⚠️ Code generation failed. "
-                    "The model may be busy or rate-limited. "
-                    "Please try again."
+                    "⚠️ Code generation or delivery failed. "
+                    "The model may be busy, rate-limited, or the "
+                    "attachment may exceed Discord's upload limit. "
+                    "Please try again with a smaller request."
                 )
             )
         except discord.HTTPException:
