@@ -10,6 +10,7 @@ from channel_manager import (
     get_chat_channels,
     remove_guild_channels,
 )
+from commands.research import handle_ask_research
 from ai_client import ask_veyra
 from memory_manager import (
     get_user_memory,
@@ -300,19 +301,32 @@ async def on_message(message):
         if len(product_parts) >= 2:
             subcommand = product_parts[1].lower()
 
+
             if subcommand in PRODUCTS:
                 COMMANDS_USED += 1
 
                 if len(product_parts) == 3:
-                    await handle_ask_product(
+                    question = product_parts[2]
+
+                    if subcommand == "research":
+                        await handle_ask_research(
+                            message,
+                            question,
+                        )
+                    else:
+                        await handle_ask_product(
+                            message,
+                            subcommand,
+                            question,
+                        )
+                else:
+                    await handle_product_command(
                         message,
                         subcommand,
-                        product_parts[2],
                     )
-                else:
-                    await handle_product_command(message, subcommand)
 
                 return
+
 
             if subcommand == "grantpro":
                 COMMANDS_USED += 1
