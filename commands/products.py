@@ -373,9 +373,10 @@ async def handle_ask_product(message, product_id, prompt):
 
     try:
         answer = await ask_veyra(
-            prompt=f"{system_prompt}\n\nUser request:\n{prompt}",
-            mode="deep" if tier == "pro" else "chat",
-        )
+    prompt=f"{system_prompt}\n\nUser request:\n{prompt}",
+    mode="deep" if tier == "pro" else "chat",
+    web_search=(product_id == "research" and tier == "pro"),
+)
 
         answer = str(answer or "I couldn't generate a response.")
         result = discord.Embed(
