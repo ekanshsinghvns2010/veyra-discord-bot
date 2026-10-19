@@ -18,9 +18,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 PROJECTS_FILE = DATA_DIR / "code_projects.json"
 
-# Discord embed descriptions allow up to 4096 characters.
-# Leave room for formatting and safety.
+# Discord embed descriptions have a 4096-character limit.
+# Keep a margin for formatting and platform differences.
 MAX_EMBED_CHARS = 3500
+
+# Prevent an unexpectedly huge response from overwhelming Discord.
+MAX_OUTPUT_CHARS = 100_000
 
 
 # ==================================================
@@ -87,20 +90,11 @@ def update_project(message, prompt, response):
 
 
 # ==================================================
-# OUTPUT FORMATTING
+# CODE-AWARE OUTPUT SPLITTING
 # ==================================================
 
-def split_output(text, limit=MAX_EMBED_CHARS):
-    """
-    Split output into Discord embed descriptions.
-    Avoid splitting at a newline when possible.
-    """
-
-    text = (text or "").strip()
-
-    if not text:
-        return ["No output was generated. Please try again."]
-
+def _split_plain_text(text, limit):
+    """Split ordinary text while preferring newline boundaries."""
     chunks = []
 
     while text:
@@ -110,20 +104,159 @@ def split_output(text, limit=MAX_EMBED_CHARS):
 
         cut = text.rfind("\n", 0, limit)
 
+        # Avoid producing tiny chunks when no useful newline exists.
         if cut < limit // 2:
             cut = limit
 
-        chunk = text[:cut].rstrip()
-
-        if not chunk:
-            chunk = text[:limit]
-            cut = limit
-
-        chunks.append(chunk)
-        text = text[cut:].lstrip()
+        chunks.append(text[:cut])
+        text = text[cut:]
 
     return chunks
 
+
+def split_output(text, limit=MAX_EMBED_CHARS):
+    """
+    Split generated output into Discord-safe chunks.
+
+    Fenced code blocks are kept syntactically valid across chunks:
+    if a code block spans multiple chunks, the current chunk is closed
+    and the next chunk reopens the fence using the same language label.
+
+    The returned chunks can be placed in separate Discord embeds.
+    """
+
+    text = (text or "").strip()
+
+    if not text:
+        return ["No output was generated. Please try again."]
+
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = (
+            text[:MAX_OUTPUT_CHARS]
+            + "\n\n[Output truncated: response exceeded the size limit.]"
+        )
+
+    # Track fenced blocks by their opening backticks and optional language.
+    fence_pattern = re.compile(
+        r"(?m)^ {0,3}(`{3,}|~{3,})([^\n]*)$"
+    )
+
+    chunks = []
+    current = ""
+    open_fence = None
+    position = 0
+
+    def append_chunk(value):
+        if value:
+            chunks.append(value)
+
+    def add_piece(piece):
+        nonlocal current
+
+        # When a fence is open, reserve space to close it.
+        closing = ""
+        if open_fence is not None:
+            closing = "\n" + open_fence["marker"]
+
+        available = limit - len(current) - len(closing)
+
+        if len(piece) <= available:
+            current += piece
+            return
+
+        # Flush the current chunk with a valid closing fence.
+        if current.strip():
+            append_chunk(current + closing)
+        current = ""
+
+        # Reopen the same code block in the next chunk.
+        if open_fence is not None:
+            current = (
+                open_fence["marker"]
+                + open_fence["language"]
+                + "\n"
+            )
+
+        # A single long line may exceed the remaining space.
+        # Split it into safe-sized pieces without dropping characters.
+        while piece:
+            closing = ""
+            if open_fence is not None:
+                closing = "\n" + open_fence["marker"]
+
+            available = limit - len(current) - len(closing)
+
+            if available <= 0:
+                append_chunk(current + closing)
+                current = ""
+
+                if open_fence is not None:
+                    current = (
+                        open_fence["marker"]
+                        + open_fence["language"]
+                        + "\n"
+                    )
+                continue
+
+            take = min(len(piece), available)
+            current += piece[:take]
+            piece = piece[take:]
+
+            if piece:
+                append_chunk(current + closing)
+                current = ""
+
+                if open_fence is not None:
+                    current = (
+                        open_fence["marker"]
+                        + open_fence["language"]
+                        + "\n"
+                    )
+
+    # Process the response line by line so fence boundaries are recognized.
+    lines = text.splitlines(keepends=True)
+
+    for line in lines:
+        match = fence_pattern.match(line.rstrip("\r\n"))
+
+        if match:
+            marker = match.group(1)
+            language = match.group(2).strip()
+
+            if open_fence is None:
+                open_fence = {
+                    "marker": marker,
+                    "language": language,
+                }
+                add_piece(line)
+            else:
+                # Only a matching fence type and sufficient length closes it.
+                same_type = marker[0] == open_fence["marker"][0]
+                long_enough = len(marker) >= len(
+                    open_fence["marker"]
+                )
+
+                if same_type and long_enough:
+                    add_piece(line)
+                    open_fence = None
+                else:
+                    add_piece(line)
+        else:
+            add_piece(line)
+
+    if current:
+        if open_fence is not None:
+            current += "\n" + open_fence["marker"]
+
+        append_chunk(current)
+
+    # Defensive fallback: no content should ever be silently discarded.
+    return chunks or [text[:limit]]
+
+
+# ==================================================
+# DISCORD EMBED OUTPUT
+# ==================================================
 
 async def send_output(message, response):
     """Send every response part as an embed."""
@@ -142,13 +275,21 @@ async def send_output(message, response):
             text="Generated code • Review before running"
         )
 
-        if index == 1:
-            await message.reply(
-                embed=embed,
-                mention_author=False,
+        try:
+            if index == 1:
+                await message.reply(
+                    embed=embed,
+                    mention_author=False,
+                )
+            else:
+                await message.channel.send(embed=embed)
+
+        except discord.HTTPException as exc:
+            print(
+                f"[CODE PRO SEND ERROR] Part {index}/{total}: "
+                f"{type(exc).__name__}: {exc}"
             )
-        else:
-            await message.channel.send(embed=embed)
+            raise
 
 
 # ==================================================
@@ -213,7 +354,7 @@ STRICT OUTPUT RULES
 3. Put each file's complete contents in a language-labelled Markdown
    code fence.
 4. Never combine different files into one code block.
-5. Do not replace required code with placeholders, ellipses, or
+5. Never replace required code with placeholders, ellipses, or
    statements such as "rest of the code goes here".
 6. For a single-file task, output the file directly.
 7. For follow-up changes, output only changed files unless the user
@@ -225,6 +366,8 @@ STRICT OUTPUT RULES
 12. Never execute generated code on the bot host.
 13. Never reveal API keys, passwords, or private credentials.
 14. Do not generate malware or harmful code.
+15. Keep every file complete; do not split a file into numbered
+    response parts yourself. The platform will handle output splitting.
 
 SUPPORTED PROJECTS
 Websites, Android apps, Discord bots, Python tools, robotics software,
