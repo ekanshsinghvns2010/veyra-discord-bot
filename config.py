@@ -16,6 +16,10 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 BOT_NAME = "Veyra"
 BOT_STUDIO = "Volbasty Studios"
 
+DEVELOPMENT_GUILD_ID = int(
+    os.getenv("VEYRA_DEVELOPMENT_GUILD_ID", "0")
+)
+
 # AI response settings
 MAX_TOKENS = 1200
 TEMPERATURE = 0.7
