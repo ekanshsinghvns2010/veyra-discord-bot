@@ -16,11 +16,12 @@ OWNER_ID = os.getenv("VEYRA_OWNER_ID", "").strip()
 if not API_KEY:
     raise RuntimeError("OPENROUTER_API_KEY is not configured.")
 
+# Allow more time for deep research and web-search tool calls.
 client = AsyncOpenAI(
     api_key=API_KEY,
     base_url=OPENROUTER_BASE_URL,
-    timeout=90.0,
-    max_retries=2,
+    timeout=300.0,
+    max_retries=1,
 )
 
 BASE_PROMPT = f"""
@@ -53,6 +54,7 @@ When web search is available, use it for current or research-based
 questions. Never invent sources, URLs, or search findings.
 Clearly distinguish verified facts from uncertainty.
 """
+
 
 def _memory_context(summary, preferences):
     sections = []
@@ -93,7 +95,7 @@ def _source_links(message):
     for annotation in annotations:
         if isinstance(annotation, dict):
             kind = annotation.get("type")
-            citation = annotation.get("url_citation", {})
+            citation = annotation.get("url_citation") or {}
         else:
             kind = getattr(annotation, "type", None)
             citation = getattr(annotation, "url_citation", None)
@@ -116,6 +118,7 @@ def _source_links(message):
             continue
 
         seen_urls.add(url)
+
         label = title.strip() if isinstance(title, str) else ""
         if not label:
             label = url.split("/")[2]
@@ -125,7 +128,7 @@ def _source_links(message):
     if not sources:
         return ""
 
-    return "\n\n**Sources**\n" + "\n".join(sources[:10])
+    return "\n\n**Additional sources**\n" + "\n".join(sources[:10])
 
 
 async def ask_veyra(
@@ -151,6 +154,15 @@ async def ask_veyra(
         memory_summary,
         preferences or {},
     )
+
+    if web_search:
+        system_prompt += (
+            "\n\nFor this request, use the available live web-search "
+            "tool before producing the research report. Search reliable "
+            "sources, include their actual URLs as clickable Markdown "
+            "links, and never fabricate citations. If search fails, "
+            "say so explicitly."
+        )
 
     messages = [
         {
@@ -195,8 +207,6 @@ async def ask_veyra(
         "temperature": TEMPERATURE,
     }
 
-    
-
     if web_search:
         request_options["tools"] = [
             {
@@ -210,34 +220,42 @@ async def ask_veyra(
             }
         ]
 
-        # Put the research requirement in the system instructions.
-        messages[0]["content"] += (
-            "\n\nFor this request, use the available live web-search "
-            "tool before producing the research report. Search for "
-            "reliable sources and include their actual URLs as "
-            "clickable Markdown links. Never fabricate citations."
-        )
-
     response = await client.chat.completions.create(
         **request_options
     )
 
+    if not response.choices:
+        return "Veyra received no response from the AI provider. Please try again."
+
     message = response.choices[0].message
-    answer = message.content or ""
+    answer = (message.content or "").strip()
     finish_reason = response.choices[0].finish_reason
 
     if web_search:
-        answer += _source_links(message)
+        extra_sources = _source_links(message)
+
+        # Avoid appending the same source URLs already present in the answer.
+        if extra_sources:
+            existing_answer = answer.lower()
+            new_sources = [
+                line for line in extra_sources.splitlines()
+                if line.startswith("- [")
+                and line.split("](", 1)[-1].rstrip(")") not in existing_answer
+            ]
+
+            if new_sources:
+                answer += "\n\n**Additional sources**\n" + "\n".join(new_sources)
 
     if finish_reason == "length":
         answer += (
-            "\n\n*This answer may be incomplete because of "
-            "the response limit.*"
+            "\n\n*This answer may be incomplete because it reached "
+            "the response token limit.*"
         )
 
-    return answer
+    if not answer:
+        answer = "Veyra received an empty response. Please try again."
 
-  
+    return answer
 
 
 async def summarize_memory(previous_summary, older_messages):
