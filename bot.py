@@ -36,7 +36,14 @@ from commands.setchannel import handle_setchannel
 from commands.removechannel import handle_removechannel
 from commands.memory import handle_memory
 
-from security.permissions import is_developer
+from commands.logging_service import (
+    log_command,
+    log_error,
+    log_ai_request,
+    log_memory_event,
+    log_system_event,
+)
+
 from security.dev_commands import handle_dev_command
 
 try:
@@ -46,7 +53,7 @@ except ImportError:
 
 
 # ==================================================
-# VEYRA CONFIGURATION
+# CONFIGURATION
 # ==================================================
 
 intents = discord.Intents.default()
@@ -58,6 +65,7 @@ client = discord.Client(intents=intents)
 
 COMMANDS_USED = 0
 START_TIME = time.monotonic()
+STARTUP_LOGGED = False
 
 
 # ==================================================
@@ -73,10 +81,12 @@ def is_admin(member, guild=None):
     if guild is not None and member.guild.id != guild.id:
         return False
 
+    permissions = member.guild_permissions
+
     return (
         member.id == member.guild.owner_id
-        or member.guild_permissions.administrator
-        or member.guild_permissions.manage_guild
+        or permissions.administrator
+        or permissions.manage_guild
     )
 
 
@@ -86,7 +96,59 @@ def is_server_manager(member, guild=None):
 
 
 # ==================================================
-# HELPERS
+# LOGGING HELPERS
+# ==================================================
+
+async def safe_log(log_function, *args, **kwargs):
+    """Logging failures must never break normal bot commands."""
+
+    try:
+        await log_function(*args, **kwargs)
+    except Exception as error:
+        print(
+            f"[LOGGING ERROR] {type(error).__name__}: "
+            "logging operation failed."
+        )
+
+
+async def record_command(message, command_name, status="received"):
+    """Record command metadata without storing message content."""
+
+    if message.guild is None:
+        return
+
+    await safe_log(
+        log_command,
+        client,
+        message.guild.id,
+        message.author.id,
+        command_name,
+        status,
+    )
+
+
+async def record_error(message, location, error):
+    """Log error metadata, not private content or tracebacks."""
+
+    guild_id = message.guild.id if message.guild else 0
+
+    print(
+        f"[ERROR] location={location}; "
+        f"type={type(error).__name__}; guild_id={guild_id}"
+    )
+
+    if guild_id:
+        await safe_log(
+            log_error,
+            client,
+            guild_id,
+            location,
+            type(error).__name__,
+        )
+
+
+# ==================================================
+# GENERAL HELPERS
 # ==================================================
 
 def get_message_content(message):
@@ -98,7 +160,7 @@ def is_command(content):
 
 
 async def safe_reply(message, content=None, **kwargs):
-    """Reply safely without crashing the message handler."""
+    """Reply without allowing a Discord send error to crash handling."""
 
     try:
         await message.reply(
@@ -107,7 +169,7 @@ async def safe_reply(message, content=None, **kwargs):
             **kwargs,
         )
     except Exception as error:
-        print(f"[REPLY ERROR] {type(error).__name__}: {error}")
+        print(f"[REPLY ERROR] {type(error).__name__}")
 
 
 def looks_like_coding_request(content):
@@ -178,12 +240,15 @@ async def send_coding_upgrade_embed(message):
 
 
 async def send_long_reply(message, text):
-    """Split normal AI replies under Discord's message limit."""
+    """Split replies into chunks below Discord's message limit."""
 
     text = str(text or "").strip()
 
     if not text:
-        text = "I couldn't generate a response just now. Please try again."
+        text = (
+            "I couldn't generate a response just now. "
+            "Please try again."
+        )
 
     for start in range(0, len(text), 1900):
         chunk = text[start:start + 1900]
@@ -192,9 +257,27 @@ async def send_long_reply(message, text):
             await message.reply(
                 chunk,
                 mention_author=False,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         else:
-            await message.channel.send(chunk)
+            await message.channel.send(
+                chunk,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+
+def get_command_parts(content):
+    """Parse !veyra <subcommand> [remaining arguments]."""
+
+    parts = content.split(maxsplit=2)
+
+    if not parts or parts[0].lower() != PREFIX.lower():
+        return None, ""
+
+    subcommand = parts[1].lower() if len(parts) >= 2 else ""
+    arguments = parts[2] if len(parts) >= 3 else ""
+
+    return subcommand, arguments
 
 
 # ==================================================
@@ -203,6 +286,8 @@ async def send_long_reply(message, text):
 
 @client.event
 async def on_ready():
+    global STARTUP_LOGGED
+
     print("=" * 48)
     print(f"[READY] Veyra AI connected as {client.user}")
     print(f"[READY] Bot ID: {client.user.id}")
@@ -214,6 +299,17 @@ async def on_ready():
     print("[READY] Waiting for messages...")
     print("=" * 48)
 
+    if not STARTUP_LOGGED:
+        STARTUP_LOGGED = True
+
+        for guild in client.guilds:
+            await safe_log(
+                log_system_event,
+                client,
+                guild.id,
+                f"Veyra connected successfully. Bot ID: {client.user.id}",
+            )
+
 
 # ==================================================
 # SERVER CLEANUP
@@ -221,21 +317,32 @@ async def on_ready():
 
 @client.event
 async def on_guild_remove(guild):
-    """Clean up saved chat-channel settings when leaving a server."""
+    """Clean up saved chat-channel settings after leaving a server."""
 
     try:
         remove_guild_channels(guild.id)
+
         print(
             f"[GUILD] Removed chat-channel settings "
             f"for server {guild.id}"
         )
-    except Exception:
-        print("[GUILD ERROR] Could not clean up server settings.")
-        traceback.print_exc()
+
+    except Exception as error:
+        print(
+            f"[GUILD ERROR] Cleanup failed: "
+            f"{type(error).__name__}"
+        )
+
+    await safe_log(
+        log_system_event,
+        client,
+        guild.id,
+        "Veyra left a server; saved chat-channel settings were cleaned up.",
+    )
 
 
 # ==================================================
-# MESSAGE HANDLER
+# MESSAGE HANDLER — PART 1
 # ==================================================
 
 @client.event
@@ -254,11 +361,7 @@ async def on_message(message):
     prefix = PREFIX.lower()
 
     try:
-        # ------------------------------------------
-        # DEVELOPER-ONLY COMMAND ROUTER
-        # ------------------------------------------
-        # This router must enforce the developer allowlist
-        # internally. Server-admin status is NOT developer access.
+        # DEVELOPER-ONLY COMMANDS
 
         if is_command(content):
             handled = await handle_dev_command(
@@ -269,14 +372,23 @@ async def on_message(message):
 
             if handled:
                 COMMANDS_USED += 1
+                command_name = (
+                    content.split()[1]
+                    if len(content.split()) > 1
+                    else "dev"
+                )
+                await record_command(
+                    message,
+                    command_name,
+                    "handled",
+                )
                 return
 
-        # ------------------------------------------
         # PING
-        # ------------------------------------------
 
         if lowered == f"{prefix} ping":
             COMMANDS_USED += 1
+            await record_command(message, "ping")
 
             await handle_ping(
                 message,
@@ -286,42 +398,38 @@ async def on_message(message):
             )
             return
 
-        # ------------------------------------------
         # HELP
-        # ------------------------------------------
 
         if lowered in (
             f"{prefix} help",
             f"{prefix} guide",
         ):
             COMMANDS_USED += 1
+            await record_command(message, "help")
             await handle_help(message, PREFIX)
             return
 
-        # ------------------------------------------
-        # SERVER LOGGING SETUP
-        # ------------------------------------------
+        # LOGGING SETUP
 
         if lowered == f"{prefix} logs":
             COMMANDS_USED += 1
+            await record_command(message, "logs")
             await handle_logs(message)
             return
 
-        # ------------------------------------------
-        # MEMORY
-        # ------------------------------------------
+        # MEMORY INFORMATION
 
         if lowered == f"{prefix} memory":
             COMMANDS_USED += 1
+            await record_command(message, "memory")
             await handle_memory(message)
             return
 
-        # ------------------------------------------
-        # FORGET MEMORY
-        # ------------------------------------------
+        # CLEAR MEMORY
 
         if lowered == f"{prefix} forget":
             COMMANDS_USED += 1
+            await record_command(message, "forget")
 
             guild_id = message.guild.id if message.guild else 0
 
@@ -330,39 +438,45 @@ async def on_message(message):
                 message.author.id,
             )
 
+            await safe_log(
+                log_memory_event,
+                client,
+                guild_id,
+                message.author.id,
+                "User cleared their saved conversation memory.",
+            )
+
             await safe_reply(
                 message,
                 "🧹 Your saved Veyra conversation memory has been cleared.",
             )
             return
 
-        # ------------------------------------------
         # SHOP
-        # ------------------------------------------
 
         if lowered == f"{prefix} shop":
             COMMANDS_USED += 1
+            await record_command(message, "shop")
 
             if handle_shop is None:
                 await safe_reply(
                     message,
                     "🛍️ The shop module isn't installed yet. "
-                    "Add commands/shop.py first.",
+                    "Add `commands/shop.py` first.",
                 )
                 return
 
             await handle_shop(message, PREFIX)
             return
 
-        # ------------------------------------------
-        # SERVER CHAT CHANNEL SETUP
-        # ------------------------------------------
+        # SET CHAT CHANNEL
 
         if (
             lowered == f"{prefix} setchannel"
             or lowered.startswith(f"{prefix} setchannel ")
         ):
             COMMANDS_USED += 1
+            await record_command(message, "setchannel")
 
             if message.guild is None:
                 await safe_reply(
@@ -386,15 +500,14 @@ async def on_message(message):
             )
             return
 
-        # ------------------------------------------
         # REMOVE CHAT CHANNEL
-        # ------------------------------------------
 
         if (
             lowered == f"{prefix} removechannel"
             or lowered.startswith(f"{prefix} removechannel ")
         ):
             COMMANDS_USED += 1
+            await record_command(message, "removechannel")
 
             if message.guild is None:
                 await safe_reply(
@@ -417,15 +530,14 @@ async def on_message(message):
             )
             return
 
-        # ------------------------------------------
         # CHAT MODE
-        # ------------------------------------------
 
         if lowered in (
             f"{prefix} chat",
             f"{prefix} longchat",
         ):
             COMMANDS_USED += 1
+            await record_command(message, "mode")
 
             if message.guild is None:
                 await safe_reply(
@@ -461,20 +573,16 @@ async def on_message(message):
             )
             return
 
-        # ------------------------------------------
         # PRODUCT COMMAND ROUTING
-        # ------------------------------------------
 
-        parts = content.split(maxsplit=2)
+        subcommand, question = get_command_parts(content)
 
-        if len(parts) >= 2 and parts[0].lower() == prefix:
-            subcommand = parts[1].lower()
-            question = parts[2] if len(parts) == 3 else ""
-
+        if subcommand:
             # CODE PRO
 
             if subcommand == "codepro":
                 COMMANDS_USED += 1
+                await record_command(message, "codepro")
 
                 handled = await handle_code_pro(
                     message,
@@ -494,13 +602,15 @@ async def on_message(message):
 
             if subcommand == "products":
                 COMMANDS_USED += 1
+                await record_command(message, "products")
                 await handle_products(message)
                 return
 
-            # EXISTING PRODUCT HANDLERS
+            # PRODUCT COMMANDS
 
             if subcommand in PRODUCTS:
                 COMMANDS_USED += 1
+                await record_command(message, subcommand)
 
                 if question:
                     if subcommand == "research":
@@ -523,23 +633,20 @@ async def on_message(message):
                 return
 
             # GRANT PRO
-            # Keep authorization inside the products module.
+            # Authorization remains inside the products module.
 
             if subcommand == "grantpro":
                 COMMANDS_USED += 1
-                await handle_grant_pro(message, parts)
+                await record_command(message, "grantpro")
+                await handle_grant_pro(message, content.split())
                 return
 
-        # ------------------------------------------
-        # IGNORE UNKNOWN COMMANDS
-        # ------------------------------------------
+        # IGNORE UNKNOWN PREFIX COMMANDS
 
         if is_command(content):
             return
 
-        # ------------------------------------------
         # SERVER-ONLY AI CHAT
-        # ------------------------------------------
 
         if message.guild is None:
             return
@@ -558,17 +665,13 @@ async def on_message(message):
             f"user_id={user_id}"
         )
 
-        # ------------------------------------------
         # CODING REQUEST ROUTER
-        # ------------------------------------------
 
         if looks_like_coding_request(content):
             await send_coding_upgrade_embed(message)
             return
 
-        # ------------------------------------------
-        # USER MEMORY AND PREFERENCES
-        # ------------------------------------------
+        # LOAD USER MEMORY AND PREFERENCES
 
         memory = get_user_memory(guild_id, user_id)
 
@@ -620,6 +723,8 @@ async def on_message(message):
             )
             preferences["language"] = "English"
 
+        # SAVE USER MESSAGE
+
         add_message(
             guild_id,
             user_id,
@@ -627,26 +732,53 @@ async def on_message(message):
             content,
         )
 
-        # ------------------------------------------
         # AI REQUEST
-        # ------------------------------------------
 
         mode = get_chat_mode(guild_id)
 
-        async with message.channel.typing():
-            reply = await ask_veyra(
-                prompt=content,
-                mode=mode,
-                memory_summary=summary,
-                preferences=preferences,
-                history=history,
+        await safe_log(
+            log_ai_request,
+            client,
+            guild_id,
+            user_id,
+            mode,
+            "started",
+        )
+
+        try:
+            async with message.channel.typing():
+                reply = await ask_veyra(
+                    prompt=content,
+                    mode=mode,
+                    memory_summary=summary,
+                    preferences=preferences,
+                    history=history,
+                )
+
+        except Exception as error:
+            await safe_log(
+                log_ai_request,
+                client,
+                guild_id,
+                user_id,
+                mode,
+                "failed",
             )
+
+            await record_error(
+                message,
+                "AI request",
+                error,
+            )
+            raise
 
         if not reply:
             reply = (
                 "I couldn't generate a response just now. "
                 "Please try again."
             )
+
+        # SAVE ASSISTANT RESPONSE
 
         add_message(
             guild_id,
@@ -655,15 +787,27 @@ async def on_message(message):
             str(reply),
         )
 
+        # SEND RESPONSE
+
         await send_long_reply(message, reply)
 
-    except Exception as error:
-        print(
-            f"[MESSAGE ERROR] type={type(error).__name__}; "
-            f"user_id={message.author.id}; "
-            f"guild_id={message.guild.id if message.guild else 0}"
+        await safe_log(
+            log_ai_request,
+            client,
+            guild_id,
+            user_id,
+            mode,
+            "success",
         )
-        traceback.print_exc()
+
+    except Exception as error:
+        await record_error(
+            message,
+            "on_message",
+            error,
+        )
+
+        print("[MESSAGE ERROR] Message processing failed.")
 
         await safe_reply(
             message,
