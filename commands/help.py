@@ -4,202 +4,222 @@ import discord
 from config import PREFIX
 
 
-BLUE = discord.Color.from_rgb(35, 160, 255)
+HELP_TEXT = {
+    "en": {
+        "title": "❄️ Veyra AI — Command Center",
+        "description": "Prefix: `{prefix}`\nYour compact guide to Veyra.",
+        "language": "🌐 Display language",
+        "placeholder": "Choose help language...",
+        "english": "English",
+        "hindi": "हिन्दी (Hindi)",
+        "language_desc_en": "Show the help menu in English",
+        "language_desc_hi": "हेल्प मेनू हिंदी में दिखाएँ",
+        "ai": "🤖 AI & Chat",
+        "chat": "Quick chat mode",
+        "longchat": "Detailed response mode",
+        "memory": "View your memory info",
+        "forget": "Clear your personal memory",
+        "tools": "🛠️ Tools",
+        "ping": "Check bot status",
+        "codepro": "Coding assistance",
+        "products": "Browse available tools",
+        "product_usage": "Use a product with a question",
+        "shop": "Open the shop",
+        "admin": "🛡️ Server Admin",
+        "setchannel": "Set the AI channel",
+        "removechannel": "Remove the AI channel",
+        "logs": "Configure bot logging",
+        "developer": "👑 Developer",
+        "devhelp": "View developer commands",
+        "dev_note": "Developer commands require authorized access.",
+        "footer": "VEYRA AI • Volbasty Studios",
+        "denied": "Only the person who opened this help menu can change its language.",
+        "expired": "This help menu has expired. Run the help command again.",
+    },
+    "hi": {
+        "title": "❄️ Veyra AI — कमांड सेंटर",
+        "description": "Prefix: `{prefix}`\nVeyra की छोटी-सी गाइड।",
+        "language": "🌐 डिस्प्ले भाषा",
+        "placeholder": "हेल्प की भाषा चुनें...",
+        "english": "English",
+        "hindi": "हिन्दी (Hindi)",
+        "language_desc_en": "हेल्प मेनू अंग्रेज़ी में दिखाएँ",
+        "language_desc_hi": "हेल्प मेनू हिंदी में दिखाएँ",
+        "ai": "🤖 AI और चैट",
+        "chat": "छोटे जवाब वाला चैट मोड",
+        "longchat": "विस्तृत जवाब वाला मोड",
+        "memory": "अपनी मेमोरी की जानकारी देखें",
+        "forget": "अपनी पर्सनल मेमोरी मिटाएँ",
+        "tools": "🛠️ टूल्स",
+        "ping": "बॉट का स्टेटस जाँचें",
+        "codepro": "कोडिंग में सहायता",
+        "products": "उपलब्ध टूल्स देखें",
+        "product_usage": "सवाल के साथ किसी प्रोडक्ट का उपयोग करें",
+        "shop": "शॉप खोलें",
+        "admin": "🛡️ सर्वर एडमिन",
+        "setchannel": "AI चैनल सेट करें",
+        "removechannel": "AI चैनल हटाएँ",
+        "logs": "बॉट लॉगिंग सेट करें",
+        "developer": "👑 डेवलपर",
+        "devhelp": "डेवलपर कमांड देखें",
+        "dev_note": "डेवलपर कमांड के लिए अधिकृत एक्सेस ज़रूरी है।",
+        "footer": "VEYRA AI • Volbasty Studios",
+        "denied": "इस हेल्प मेनू की भाषा केवल इसे खोलने वाला यूज़र बदल सकता है।",
+        "expired": "यह हेल्प मेनू समाप्त हो गया है। दोबारा help कमांड चलाएँ।",
+    },
+}
 
 
-def build_help_embed(language: str, prefix: str) -> discord.Embed:
-    """Build Veyra's help embed in English or Hindi."""
+def build_help_embed(prefix, language):
+    text = HELP_TEXT[language]
 
-    if language == "hi":
-        embed = discord.Embed(
-            title="❄️ VEYRA AI",
-            description=(
-                "**कमांड सेंटर**\n"
-                "आपकी AI यात्रा में आपका स्वागत है!\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "💠 **AI चैट**\n"
-                "निर्धारित सर्वर चैनल में सामान्य तरीके से बात करें।"
-            ),
-            color=BLUE,
-        )
-
-        embed.add_field(
-            name="⚡ सामान्य कमांड",
-            value=(
-                f"`{prefix} help` — सहायता मेनू खोलें\n"
-                f"`{prefix} guide` — उपयोग गाइड देखें\n"
-                f"`{prefix} ping` — बॉट की स्थिति जाँचें\n"
-                f"`{prefix} memory` — अपनी सेव की गई मेमोरी देखें\n"
-                f"`{prefix} forget` — अपनी मेमोरी मिटाएँ\n"
-                f"`{prefix} shop` — Code Pro, Study Pro और Deep Research देखें"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🛠️ सर्वर मैनेजमेंट",
-            value=(
-                f"`{prefix} setchannel #channel` — AI चैनल सेट करें\n"
-                f"`{prefix} removechannel` — AI चैनल हटाएँ\n"
-                f"`{prefix} chat` — छोटे जवाबों वाला मोड\n"
-                f"`{prefix} longchat` — विस्तृत जवाबों वाला मोड"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🌌 VEYRA का उपयोग कैसे करें",
-            value=(
-                "**01** सवाल पूछने के लिए निर्धारित चैट चैनल का उपयोग करें।\n"
-                "**02** अपनी पसंदीदा भाषा में बात करें।\n"
-                "**03** `memory` से सेव की गई जानकारी देखें।\n"
-                "**04** `forget` से अपनी मेमोरी साफ़ करें।\n"
-                "**05** `shop` से उपलब्ध प्रीमियम विकल्प देखें।"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🔐 अनुमतियाँ",
-            value=(
-                "चैनल और चैट मोड बदलने के लिए सर्वर मालिक "
-                "या एडमिन की अनुमति आवश्यक है।\n\n"
-                "मेमोरी कमांड केवल आपकी अपनी मेमोरी पर असर डालते हैं।"
-            ),
-            inline=False,
-        )
-
-    else:
-        embed = discord.Embed(
-            title="❄️ VEYRA AI",
-            description=(
-                "**COMMAND CENTER**\n"
-                "Your gateway to intelligence beyond limits.\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "💠 **AI CHAT**\n"
-                "Chat naturally in the configured server channel."
-            ),
-            color=BLUE,
-        )
-
-        embed.add_field(
-            name="⚡ GENERAL COMMANDS",
-            value=(
-                f"`{prefix} help` — Display this command guide\n"
-                f"`{prefix} guide` — Open the help guide\n"
-                f"`{prefix} ping` — Check bot status\n"
-                f"`{prefix} memory` — View your saved memory privately\n"
-                f"`{prefix} forget` — Clear your saved memory\n"
-                f"`{prefix} shop` — Explore Code Pro, Study Pro & Deep Research"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🛠️ SERVER MANAGEMENT",
-            value=(
-                f"`{prefix} setchannel #channel` — Configure the AI channel\n"
-                f"`{prefix} removechannel` — Remove the AI channel\n"
-                f"`{prefix} chat` — Switch to quick-response mode\n"
-                f"`{prefix} longchat` — Switch to detailed-response mode"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🌌 HOW TO USE VEYRA",
-            value=(
-                "**01** Ask questions in the configured chat channel.\n"
-                "**02** Chat naturally in your preferred language.\n"
-                "**03** Use `memory` to review saved context.\n"
-                "**04** Use `forget` to clear your saved memory.\n"
-                "**05** Use `shop` to explore premium options."
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🔐 PERMISSIONS",
-            value=(
-                "Channel configuration and response-mode changes "
-                "require server owner or administrator permissions.\n\n"
-                "Memory commands affect only your own saved memory."
-            ),
-            inline=False,
-        )
-
-    embed.set_footer(
-        text="VEYRA AI • Powered by Volbasty Studios"
+    embed = discord.Embed(
+        title=text["title"],
+        description=text["description"].format(prefix=prefix),
+        color=discord.Color.from_rgb(42, 164, 255),
     )
 
+    embed.add_field(
+        name=text["ai"],
+        value=(
+            f"`{prefix} chat` — {text['chat']}\n"
+            f"`{prefix} longchat` — {text['longchat']}\n"
+            f"`{prefix} memory` — {text['memory']}\n"
+            f"`{prefix} forget` — {text['forget']}"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name=text["tools"],
+        value=(
+            f"`{prefix} ping` — {text['ping']}\n"
+            f"`{prefix} codepro <task>` — {text['codepro']}\n"
+            f"`{prefix} products` — {text['products']}\n"
+            f"`{prefix} <product> <question>` — {text['product_usage']}\n"
+            f"`{prefix} shop` — {text['shop']}"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name=text["admin"],
+        value=(
+            f"`{prefix} setchannel #channel` — {text['setchannel']}\n"
+            f"`{prefix} removechannel #channel` — {text['removechannel']}\n"
+            f"`{prefix} logs` — {text['logs']}"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name=text["developer"],
+        value=(
+            f"`{prefix} devhelp` — {text['devhelp']}\n"
+            f"{text['dev_note']}"
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(text=text["footer"])
     return embed
 
 
 class HelpLanguageSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, prefix: str):
-        self.owner_id = owner_id
-        self.prefix = prefix
-
+    def __init__(self):
         options = [
             discord.SelectOption(
                 label="English",
                 value="en",
                 emoji="🇬🇧",
-                description="View the help menu in English",
+                description="Show the help menu in English",
                 default=True,
             ),
             discord.SelectOption(
-                label="Hindi",
+                label="हिन्दी (Hindi)",
                 value="hi",
                 emoji="🇮🇳",
-                description="हिंदी में सहायता मेनू देखें",
+                description="हेल्प मेनू हिंदी में दिखाएँ",
             ),
         ]
 
         super().__init__(
-            placeholder="🌐 Choose language / भाषा चुनें",
+            placeholder="🌐 Choose help language / भाषा चुनें",
             min_values=1,
             max_values=1,
             options=options,
+            custom_id="veyra_help_language",
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
+        view = self.view
+
+        if not isinstance(view, HelpLanguageView):
+            return
+
+        if interaction.user.id != view.owner_id:
             await interaction.response.send_message(
-                "Only the person who opened this help menu "
-                "can change its language.",
+                HELP_TEXT[view.language]["denied"],
                 ephemeral=True,
             )
             return
 
         language = self.values[0]
+        view.language = language
 
+        # Update the selected option in the dropdown.
         for option in self.options:
             option.default = option.value == language
 
         await interaction.response.edit_message(
-            embed=build_help_embed(language, self.prefix),
-            view=self.view,
+            embed=build_help_embed(view.prefix, language),
+            view=view,
         )
 
 
-class HelpView(discord.ui.View):
-    def __init__(self, owner_id: int, prefix: str):
-        super().__init__(timeout=180)
-        self.add_item(HelpLanguageSelect(owner_id, prefix))
+class HelpLanguageView(discord.ui.View):
+    def __init__(self, owner_id, prefix):
+        super().__init__(timeout=300)
+
+        self.owner_id = owner_id
+        self.prefix = prefix
+        self.language = "en"
+
+        self.add_item(HelpLanguageSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Only the person who opened this help menu can use its dropdown.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+        # The original message may no longer be editable.
+        if getattr(self, "message", None):
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
 
 
-async def handle_help(message, prefix=None):
-    """Send Veyra's help menu with a language selector."""
+async def handle_help(message, prefix=PREFIX):
+    view = HelpLanguageView(
+        owner_id=message.author.id,
+        prefix=prefix,
+    )
 
-    if prefix is None:
-        prefix = PREFIX
-
-    embed = build_help_embed("en", prefix)
-    view = HelpView(message.author.id, prefix)
-
-    await message.reply(
-        embed=embed,
+    sent_message = await message.reply(
+        embed=build_help_embed(prefix, "en"),
         view=view,
         mention_author=False,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
+
+    view.message = sent_message
