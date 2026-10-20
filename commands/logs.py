@@ -16,12 +16,12 @@ DATA_DIR = Path(os.getenv("VEYRA_DATA_DIR", "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "logging_config.json"
 
-EMOJI_LOADING = "<a:loading:EMOJI_ID>"
+EMOJI_LOADING = "<a:loading:1562036543236083823>"
 EMOJI_SUCCESS = "<a:success:EMOJI_ID>"
-EMOJI_ERROR = "<a:error:EMOJI_ID>"
-EMOJI_SECURITY = "<a:security:EMOJI_ID>"
-EMOJI_LOGS = "<a:logs:EMOJI_ID>"
-EMOJI_CANCEL = "<a:cancel:EMOJI_ID>"
+EMOJI_ERROR = "<a:error:1562036219674890240>"
+EMOJI_SECURITY = "<:security:1562036145515266169>"
+EMOJI_LOGS = "<:logs:1562036061620797473>"
+EMOJI_CANCEL = "<a:cancel:1562035965722234991>"
 
 FALLBACK_LOADING = "🔄"
 FALLBACK_SUCCESS = "✅"
