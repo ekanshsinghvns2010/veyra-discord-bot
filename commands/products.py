@@ -10,6 +10,7 @@ import discord
 from ai_client import ask_veyra
 
 ICE_BLUE = discord.Color.from_rgb(42, 164, 255)
+EMBED_CHUNK_SIZE = 3800
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 ACCESS_FILE = DATA_DIR / "product_access.json"
@@ -126,6 +127,37 @@ def set_tier(user_id, product_id, tier):
 
     user[product_id] = tier
     save_access(data)
+
+
+def split_answer(text, limit=EMBED_CHUNK_SIZE):
+    """Split long AI answers into embed-safe chunks."""
+    text = str(text or "").strip()
+
+    if not text:
+        return ["I couldn't generate a response. Please try again."]
+
+    chunks = []
+
+    while len(text) > limit:
+        split_at = text.rfind("\n", 0, limit + 1)
+
+        if split_at < limit // 2:
+            split_at = text.rfind(" ", 0, limit + 1)
+
+        if split_at < limit // 2:
+            split_at = limit
+
+        chunk = text[:split_at].strip()
+
+        if chunk:
+            chunks.append(chunk)
+
+        text = text[split_at:].strip()
+
+    if text:
+        chunks.append(text)
+
+    return chunks or ["I couldn't generate a response. Please try again."]
 
 
 def product_embed(product_id, user_id, server_name):
@@ -317,10 +349,8 @@ async def handle_grant_pro(message, args):
         )
         return
 
-    # Resolve the target member from the Discord mention.
     target = message.mentions[0] if message.mentions else None
 
-    # Fallback for a raw Discord user mention.
     if target is None and message.guild is not None:
         match = re.search(r"<@!?(\d+)>", message.content)
 
@@ -328,8 +358,6 @@ async def handle_grant_pro(message, args):
             target_id = int(match.group(1))
             target = message.guild.get_member(target_id)
 
-    # Parse the entire message, because the command router may combine
-    # the mention and product into one argument.
     tokens = re.split(r"\s+", message.content.strip())
 
     product_id = next(
@@ -457,33 +485,31 @@ async def handle_ask_product(message, product_id, prompt):
             ),
         )
 
-        answer = str(
-            answer or "I couldn't generate a response."
-        ).strip()
+        chunks = split_answer(answer)
+        total = len(chunks)
 
-        if not answer:
-            answer = "I couldn't generate a response. Please try again."
+        for index, chunk in enumerate(chunks):
+            title = f"{product['emoji']} {product['name']}"
 
-        # Keep each embed description under Discord's 4096-character limit.
-        chunks = [
-            answer[i:i + 3900]
-            for i in range(0, len(answer), 3900)
-        ]
+            if total > 1:
+                title += f" · Part {index + 1}/{total}"
 
-        first = discord.Embed(
-            title=f"{product['emoji']} {product['name']}",
-            description=chunks[0],
-            color=ICE_BLUE,
-        )
+            embed = discord.Embed(
+                title=title,
+                description=chunk,
+                color=ICE_BLUE,
+            )
 
-        first.set_footer(
-            text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
-        )
+            embed.set_footer(
+                text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
+            )
 
-        await reply_message.edit(embed=first)
-
-        for chunk in chunks[1:]:
-            await message.channel.send(chunk)
+            if index == 0:
+                # Replace the loading embed with the first answer part.
+                await reply_message.edit(embed=embed)
+            else:
+                # Send all continuation parts as embeds as well.
+                await message.channel.send(embed=embed)
 
     except Exception as error:
         print(
@@ -492,13 +518,16 @@ async def handle_ask_product(message, product_id, prompt):
             flush=True,
         )
 
-        await reply_message.edit(
-            embed=discord.Embed(
-                title="⚠️ Product request failed",
-                description=(
-                    "Veyra couldn't complete this request. "
-                    "Please try again later."
-                ),
-                color=discord.Color.orange(),
-            )
+        error_embed = discord.Embed(
+            title="⚠️ Product request failed",
+            description=(
+                "Veyra couldn't complete this request. "
+                "Please try again later."
+            ),
+            color=discord.Color.orange(),
         )
+
+        try:
+            await reply_message.edit(embed=error_embed)
+        except discord.HTTPException:
+            await message.channel.send(embed=error_embed)
