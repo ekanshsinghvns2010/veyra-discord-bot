@@ -129,6 +129,21 @@ def set_tier(user_id, product_id, tier):
     save_access(data)
 
 
+def count_pro_users():
+    """Count unique users with Pro access to at least one product."""
+    data = load_access()
+
+    return sum(
+        1
+        for access in data.values()
+        if isinstance(access, dict)
+        and any(
+            access.get(product_id) == "pro"
+            for product_id in PRODUCTS
+        )
+    )
+
+
 def split_answer(text, limit=EMBED_CHUNK_SIZE):
     """Split long AI answers into embed-safe chunks."""
     text = str(text or "").strip()
@@ -415,6 +430,163 @@ async def handle_grant_pro(message, args):
     )
 
 
+async def handle_remove_pro(message):
+    """Revoke Pro access from a member or from every user."""
+
+    owner_id = os.getenv("VEYRA_OWNER_ID", "").strip()
+
+    if not owner_id or str(message.author.id) != owner_id:
+        await message.reply(
+            "🔒 Only the configured bot owner can remove Pro access.",
+            mention_author=False,
+        )
+        return
+
+    if message.guild is None:
+        await message.reply(
+            "Run this command inside a Discord server.",
+            mention_author=False,
+        )
+        return
+
+    tokens = message.content.split()
+    args = tokens[2:] if len(tokens) > 2 else []
+
+    # Global removal: !veyra removepro everyone
+    if any(token.lower() == "everyone" for token in args):
+        data = load_access()
+        revoked = 0
+
+        for access in data.values():
+            if not isinstance(access, dict):
+                continue
+
+            for product_id in PRODUCTS:
+                if access.get(product_id) == "pro":
+                    access[product_id] = "free"
+                    revoked += 1
+
+        try:
+            save_access(data)
+        except OSError as error:
+            print(
+                f"[REMOVE PRO ERROR] {type(error).__name__}: {error}",
+                flush=True,
+            )
+            await message.reply(
+                "❌ I couldn't save the changes. Check the bot logs.",
+                mention_author=False,
+            )
+            return
+
+        print(
+            f"[REMOVE PRO] Owner {message.author.id} revoked "
+            f"{revoked} Pro entitlements globally.",
+            flush=True,
+        )
+
+        await message.reply(
+            "✅ **Global Pro access removal complete.**\n"
+            f"**Pro entitlements revoked:** {revoked}\n"
+            f"**Users still holding Pro:** {count_pro_users()}",
+            mention_author=False,
+        )
+        return
+
+    # Individual removal: !veyra removepro @user code
+    # Or all products for one user: !veyra removepro @user all
+    target = message.mentions[0] if message.mentions else None
+
+    if target is None:
+        match = re.search(r"<@!?(\d+)>", message.content)
+
+        if match:
+            target = message.guild.get_member(int(match.group(1)))
+
+    product_id = next(
+        (
+            token.lower()
+            for token in args
+            if token.lower() in PRODUCTS
+        ),
+        None,
+    )
+
+    remove_all = any(
+        token.lower() == "all"
+        for token in args
+    )
+
+    if target is None or (product_id is None and not remove_all):
+        await message.reply(
+            "❌ I couldn't identify the member or product.\n\n"
+            "Usage:\n"
+            "`!veyra removepro @user code`\n"
+            "`!veyra removepro @user all`\n"
+            "`!veyra removepro everyone`\n\n"
+            "Products: `code`, `study`, `research`",
+            mention_author=False,
+        )
+        return
+
+    data = load_access()
+    user_id = str(target.id)
+    access = data.get(user_id, {})
+
+    if not isinstance(access, dict):
+        access = {}
+        data[user_id] = access
+
+    product_ids = list(PRODUCTS) if remove_all else [product_id]
+
+    revoked = [
+        pid
+        for pid in product_ids
+        if access.get(pid) == "pro"
+    ]
+
+    for pid in revoked:
+        access[pid] = "free"
+
+    try:
+        save_access(data)
+    except OSError as error:
+        print(
+            f"[REMOVE PRO ERROR] {type(error).__name__}: {error}",
+            flush=True,
+        )
+        await message.reply(
+            "❌ I couldn't save the changes. Check the bot logs.",
+            mention_author=False,
+        )
+        return
+
+    if not revoked:
+        await message.reply(
+            f"ℹ️ {target.mention} has no matching Pro access to remove.",
+            mention_author=False,
+        )
+        return
+
+    names = ", ".join(
+        PRODUCTS[pid]["pro_name"]
+        for pid in revoked
+    )
+
+    print(
+        f"[REMOVE PRO] Owner {message.author.id} revoked "
+        f"{', '.join(revoked)} Pro from user {target.id}.",
+        flush=True,
+    )
+
+    await message.reply(
+        f"✅ Removed Pro access from {target.mention}.\n"
+        f"**Revoked:** {names}\n"
+        f"**Users still holding Pro:** {count_pro_users()}",
+        mention_author=False,
+    )
+
+
 async def handle_ask_product(message, product_id, prompt):
     if product_id not in PRODUCTS:
         return
@@ -505,10 +677,8 @@ async def handle_ask_product(message, product_id, prompt):
             )
 
             if index == 0:
-                # Replace the loading embed with the first answer part.
                 await reply_message.edit(embed=embed)
             else:
-                # Send all continuation parts as embeds as well.
                 await message.channel.send(embed=embed)
 
     except Exception as error:
