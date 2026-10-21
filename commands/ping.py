@@ -5,10 +5,10 @@ import discord
 import psutil
 
 from config import BOT_NAME, BOT_STUDIO
+from commands.products import count_pro_users
 
 
-# Replace these placeholders with your server's animated emoji IDs.
-# Format: "<a:emoji_name:123456789012345678>"
+# Animated and standard Discord emojis.
 EMOJIS = {
     "ping": "<a:uptime:1560652462287753277>",
     "memory": "<a:equipment:1560654983689539676>",
@@ -18,6 +18,7 @@ EMOJIS = {
     "commands": "📊",
     "owner": "👑",
     "uptime": "<a:online:1560653233486045268>",
+    "pro": "⚡",
 }
 
 
@@ -49,24 +50,34 @@ async def handle_ping(
     start_time: float,
     commands_used: int,
 ) -> None:
-    """Display Veyra's live bot statistics."""
+    """Display Veyra's live bot and Pro product statistics."""
 
+    # Gateway latency
     latency_ms = round(bot.latency * 1000)
 
+    # Process resource usage
     process = psutil.Process()
     memory_mb = process.memory_info().rss / (1024 * 1024)
     cpu_percent = process.cpu_percent(interval=None)
 
+    # Bot uptime
     uptime_seconds = max(
         0,
         int(time.monotonic() - start_time),
     )
 
+    # Discord application owner
     try:
         application = await bot.application_info()
         owner_name = str(application.owner)
     except Exception:
         owner_name = "Unknown"
+
+    # Number of unique users with at least one Pro product.
+    try:
+        pro_users = count_pro_users()
+    except Exception:
+        pro_users = 0
 
     embed = discord.Embed(
         title=f"{EMOJIS['ping']} {BOT_NAME} • System Status",
@@ -102,6 +113,12 @@ async def handle_ping(
     embed.add_field(
         name=f"{EMOJIS['servers']} Servers",
         value=f"`{len(bot.guilds)}`",
+        inline=True,
+    )
+
+    embed.add_field(
+        name=f"{EMOJIS['pro']} Pro Product Users",
+        value=f"`{pro_users}` unique users",
         inline=True,
     )
 
