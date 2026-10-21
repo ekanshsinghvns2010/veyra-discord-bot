@@ -1,3 +1,4 @@
+
 # ==================== bot.py — CHUNK 1/2 ====================
 
 import os
@@ -28,6 +29,7 @@ from commands.products import (
     handle_products,
     handle_product_command,
     handle_grant_pro,
+    handle_remove_pro,
     handle_ask_product,
     PRODUCTS,
 )
@@ -652,6 +654,15 @@ async def on_message(message):
                 COMMANDS_USED += 1
                 await record_command(message, "grantpro")
                 await handle_grant_pro(message, content.split())
+                return
+
+            # REMOVE PRO
+            # Authorization remains inside the products module.
+
+            if subcommand == "removepro":
+                COMMANDS_USED += 1
+                await record_command(message, "removepro")
+                await handle_remove_pro(message)
                 return
 
         # IGNORE UNKNOWN PREFIX COMMANDS
