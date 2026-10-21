@@ -5,7 +5,7 @@ from ai_client import ask_veyra
 from commands.products import get_tier
 
 ICE_BLUE = discord.Color.from_rgb(42, 164, 255)
-MESSAGE_LIMIT = 1900
+MESSAGE_LIMIT = 3800
 
 
 def build_research_prompt(question):
@@ -88,22 +88,29 @@ async def handle_ask_research(message, question):
             web_search=(tier == "pro"),
         )
 
-        chunks = split_message(answer)
+        chunks = split_message(answer, limit=MESSAGE_LIMIT)
+        total = len(chunks)
 
-        first_embed = discord.Embed(
-            title="🔎 Veyra Research Report",
-            description=chunks[0],
-            color=ICE_BLUE,
-        )
-        first_embed.set_footer(
-            text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
-        )
+        for index, chunk in enumerate(chunks):
+            title = "🔎 Veyra Research Report"
 
-        await status_message.edit(embed=first_embed)
+            if total > 1:
+                title += f" · Part {index + 1}/{total}"
 
-        # Send remaining report sections as safe-length messages.
-        for chunk in chunks[1:]:
-            await message.channel.send(chunk)
+            embed = discord.Embed(
+                title=title,
+                description=chunk,
+                color=ICE_BLUE,
+            )
+
+            embed.set_footer(
+                text=f"{tier.upper()} • VEYRA AI • VOLBASTY STUDIOS"
+            )
+
+            if index == 0:
+                await status_message.edit(embed=embed)
+            else:
+                await message.channel.send(embed=embed)
 
     except Exception as error:
         print(
@@ -123,6 +130,4 @@ async def handle_ask_research(message, question):
         try:
             await status_message.edit(embed=error_embed)
         except discord.HTTPException:
-            await message.channel.send(
-                "⚠️ Veyra couldn't complete this research request."
-            )
+            await message.channel.send(embed=error_embed)
