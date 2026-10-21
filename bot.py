@@ -1,3 +1,4 @@
+# ==================== bot.py — CHUNK 1/2 ====================
 
 import os
 import time
@@ -30,6 +31,7 @@ from commands.products import (
     handle_ask_product,
     PRODUCTS,
 )
+from commands.study_pro import handle_study_workspace
 from commands.ping import handle_ping
 from commands.help import handle_help
 from commands.setchannel import handle_setchannel
@@ -296,6 +298,7 @@ async def on_ready():
     print("[READY] Channel configuration: file-backed")
     print("[READY] Logging command: loaded")
     print("[READY] Developer command router: loaded")
+    print("[READY] Study Pro workspace: loaded")
     print("[READY] Waiting for messages...")
     print("=" * 48)
 
@@ -606,11 +609,21 @@ async def on_message(message):
                 await handle_products(message)
                 return
 
+# ==================== bot.py — CHUNK 2/2 ====================
+
             # PRODUCT COMMANDS
 
             if subcommand in PRODUCTS:
                 COMMANDS_USED += 1
                 await record_command(message, subcommand)
+
+                # STUDY PRO WORKSPACE
+                # !veyra study opens the interactive Study workspace.
+                # !veyra study <question> keeps the existing direct-answer path.
+
+                if subcommand == "study" and not question:
+                    await handle_study_workspace(message)
+                    return
 
                 if question:
                     if subcommand == "research":
